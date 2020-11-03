@@ -1,0 +1,3 @@
+pytest
+psutil
+git+git://github.com/tgoodlet/pytest-dockerctl.git
