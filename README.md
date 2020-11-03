@@ -10,7 +10,7 @@ To run tests:
 
 	docker build --tag vtestnet:eosio \
 	    --build-arg USER_ID=$(id -u) \
-	    --build-arg GROUP_ID=$(id -g) .
+	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
 
 3 - With ``python3`` installed, run:
 
@@ -19,6 +19,13 @@ To run tests:
 4 - run tests:
 
 	pytest
+
+
+docker build interactive:
+
+	docker build --tag vtestnet:eosio-inter \
+	    --build-arg USER_ID=$(id -u) \
+	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio.interactive
 
 
 docker run interactive:
