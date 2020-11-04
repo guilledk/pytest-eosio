@@ -10,6 +10,20 @@ import psutil
 from docker.types import Mount
 
 
+_additional_mounts = []
+
+CONTRACTS_ROOTDIR = '/home/user/contracts'
+
+def append_mount(target: str, source: str):
+    _additional_mounts.append(
+        Mount(
+            target,
+            str(Path(source).resolve()),
+            'bind'
+        )
+    )
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--quick", action="store_true", default=False, help="if passed won't rebuild contract"
@@ -22,14 +36,14 @@ def eosio_testnet(dockerctl, request):
     contracts_dir = Path('contracts').resolve()
 
     contracts_wd = Mount(
-        '/home/user/contracts',  # target
+        CONTRACTS_ROOTDIR,  # target
         str(contracts_dir),  # source
         'bind'
     )
 
     with dockerctl.run(
         'vtestnet:eosio',
-        mounts=[contracts_wd]
+        mounts=[contracts_wd] + _additional_mounts
     ) as containers:
         container = containers[0]
 
@@ -96,9 +110,9 @@ def eosio_testnet(dockerctl, request):
                 assert ec == 0
 
                 if not request.config.getoption("--quick"):
-                    # Force clean build folder
+                    # Clean contract
                     ec, out = container.exec_run(
-                        'rm -rdf build',
+                       ['make', 'clean'],
                         workdir=container_dir
                     )
                     assert ec == 0
