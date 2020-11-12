@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import string
+import random
 
 from pathlib import Path
 
@@ -224,5 +226,17 @@ def eosio_testnet(dockerctl, request):
         container.create_account = _create_account
         container.get_table = _get_table
         container.get_info = _get_info
+
+        def _new_account():
+            rand_name = ''.join(
+                random.choice(string.ascii_lowercase + '12345')
+                for _ in range(12)
+            )
+            private_key, public_key = container.create_key_pair()
+            container.import_key(private_key)
+            container.create_account('eosio', rand_name, public_key)
+            return rand_name
+
+        container.new_account = _new_account
 
         yield container
