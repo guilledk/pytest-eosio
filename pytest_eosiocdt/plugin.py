@@ -209,9 +209,9 @@ def eosio_testnet(dockerctl, request):
                 demux=True
             )
             stdout, stderr = outs
-            assert ec == 0
             if stderr:
                 print(stderr.decode('utf-8'))
+            assert ec == 0
             return json.loads(stdout.decode('utf-8'))
 
         def _get_info():
