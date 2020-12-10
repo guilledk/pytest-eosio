@@ -4,6 +4,7 @@ import json
 import string
 import random
 
+from typing import Optional
 from pathlib import Path
 
 import pytest
@@ -227,15 +228,18 @@ def eosio_testnet(dockerctl, request):
         container.get_table = _get_table
         container.get_info = _get_info
 
-        def _new_account():
-            rand_name = ''.join(
-                random.choice(string.ascii_lowercase + '12345')
-                for _ in range(12)
-            )
+        def _new_account(name: Optional[str] = None):
+            if name:
+                account_name = name
+            else:
+                account_name = ''.join(
+                    random.choice(string.ascii_lowercase + '12345')
+                    for _ in range(12)
+                )
             private_key, public_key = container.create_key_pair()
             container.import_key(private_key)
-            container.create_account('eosio', rand_name, public_key)
-            return rand_name
+            container.create_account('eosio', account_name, public_key)
+            return account_name
 
         container.new_account = _new_account
 
