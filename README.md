@@ -2,9 +2,35 @@ To run tests:
 
 1 - Install docker & python 3 (pyenv recommended)
 
-2 - Start docker
+2 - With ``python3`` installed, run:
 
-	systemctl start docker
+	pip install -r requirements.txt
+	pip install .
+
+# Native mode:
+
+3 - Run keos & nodeos
+
+	keosd &
+
+	nodeos -e -p eosio \
+          --plugin eosio::producer_plugin \
+          --plugin eosio::producer_api_plugin \
+          --plugin eosio::chain_api_plugin \
+          --plugin eosio::http_plugin \
+          --plugin eosio::history_plugin \
+          --plugin eosio::history_api_plugin \
+          --filter-on="*" \
+          --access-control-allow-origin='*' \
+          --contracts-console \
+          --http-validate-host=false \
+          --verbose-http-errors >> /tmp/nodeos.log 2>&1 &
+
+4 - run tests:
+
+	pytest --native
+
+# Docker mode:
 
 3 - Build docker image from folder:
 
@@ -12,11 +38,11 @@ To run tests:
 	    --build-arg USER_ID=$(id -u) \
 	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
 
-3 - With ``python3`` installed, run:
+4 - Start docker
 
-	pip install -r requirements.txt
+	systemctl start docker
 
-4 - run tests:
+5 - run tests:
 
 	pytest
 
