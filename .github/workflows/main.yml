@@ -1,0 +1,55 @@
+name: pytest-eosiocdt
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-18.04
+    strategy:
+      matrix:
+        python-version: [3.8]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Download EOSIO O.S.
+      uses: wei/wget@v1
+      with:
+        args: https://github.com/EOSIO/eos/releases/download/v2.0.0/eosio_2.0.0-1-ubuntu-18.04_amd64.deb
+    - name: Download EOSIO cdt
+      uses: wei/wget@v1
+      with:
+        args: https://github.com/EOSIO/eosio.cdt/releases/download/v1.7.0/eosio.cdt_1.7.0-1-ubuntu-18.04_amd64.deb
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y make
+        sudo apt-get install -y ./eosio_2.0.0-1-ubuntu-18.04_amd64.deb
+        sudo apt-get install -y ./eosio.cdt_1.7.0-1-ubuntu-18.04_amd64.deb
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install .
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    - name: Start EOSIO envoirment
+      run: |
+        keosd &
+        nodeos -e -p eosio \
+          --plugin eosio::producer_plugin \
+          --plugin eosio::producer_api_plugin \
+          --plugin eosio::chain_api_plugin \
+          --plugin eosio::http_plugin \
+          --plugin eosio::history_plugin \
+          --plugin eosio::history_api_plugin \
+          --filter-on="*" \
+          --access-control-allow-origin='*' \
+          --contracts-console \
+          --http-validate-host=false \
+          --verbose-http-errors >> /tmp/nodeos.log 2>&1 &
+    - name: Run tests
+      run: |
+        pytest --native

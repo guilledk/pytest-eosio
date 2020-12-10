@@ -7,3 +7,6 @@ CONTRACTNAME=helloworld
 build:
 	mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/$(CONTRACTNAME).wasm $(SOURCES)
+
+clean:
+	rm -rf $(BUILDDIR)
