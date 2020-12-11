@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
+import time
 import json
 import string
 import random
 import subprocess
 
+from queue import Queue, Empty
 from typing import Optional
 from pathlib import Path
+from threading  import Thread
 
 import pytest
 import psutil
@@ -37,6 +40,11 @@ def pytest_addoption(parser):
     )
 
 
+
+class NodeOSException(Exception):
+    ...
+
+
 class CLEOSWrapper:
 
     def __init__(self, container: Optional = None):
@@ -52,10 +60,88 @@ class CLEOSWrapper:
             ec, out = self.container.exec_run(*args, **kwargs)
             return ec, out.decode('utf-8')
         else:
-            pinfo = subprocess.run(*args, capture_output=True, encoding='utf-8', **kwargs)
             if 'demux' in kwargs:
+                del kwargs['demux']
+                pinfo = subprocess.run(*args, capture_output=True, encoding='utf-8', **kwargs)
                 return pinfo.returncode, pinfo.stdout, pinfo.stderr
+
+            pinfo = subprocess.run(*args, capture_output=True, encoding='utf-8', **kwargs)
             return pinfo.returncode, pinfo.stdout
+
+    def start_services(self):
+        print('starting eosio services...')
+        self.proc_keosd = subprocess.Popen(
+            ['keosd'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8'
+        )
+        print('nodeos start...')
+        self.proc_nodeos = subprocess.Popen(
+            [
+                'nodeos', '-e', '-p', 'eosio',
+                '--plugin', 'eosio::producer_plugin',
+                '--plugin', 'eosio::producer_api_plugin',
+                '--plugin', 'eosio::chain_api_plugin',
+                '--plugin', 'eosio::http_plugin',
+                '--plugin', 'eosio::history_plugin',
+                '--plugin', 'eosio::history_api_plugin',
+                '--filter-on=\"*\"',
+                '--access-control-allow-origin=\"*\"',
+                '--contracts-console',
+                '--http-validate-host=false',
+                '--verbose-http-errors'
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8'
+        )
+
+        def enqueue_output(out, queue):
+            for line in out:
+                queue.put(line)
+            out.close()
+
+        stderr_queue = Queue()
+        reader_thread = Thread(
+            target=enqueue_output,
+            args=(self.proc_nodeos.stderr, stderr_queue)
+        )
+        reader_thread.daemon = True
+        reader_thread.start()
+
+        initalized = False
+        init_timeout = 5  # seg
+        start_time = time.time()
+        while not initalized:
+            try:
+                line = stderr_queue.get(timeout=0.4)
+            except Empty:
+                if time.time() - start_time > init_timeout:
+                    raise NodeOSException(f'init timeout')
+                else:
+                    continue
+            else:
+                print(line)
+                initalized = 'Produced' in line
+
+        print('eosio services started.')
+
+    def dump_services_output(self):
+        outs, errs = self.proc_keosd.communicate(timeout=1)
+        print(f'keosd exit code: {self.proc_keosd.poll()}')
+        print('keosd outs:')
+        print(outs)
+        print('keosd errs:')
+        print(errs)
+
+        outs, errs = self.proc_nodeos.communicate(timeout=1)
+        print(f'nodeos exit code: {self.proc_nodeos.poll()}')
+        print('nodeos outs:')
+        print(outs)
+        print('nodeos errs:')
+        print(errs)
+
+    def stop_services(self):
+        print('stopping eosio services...')
+        self.proc_nodeos.kill()
+        self.proc_keosd.kill()
+        print('eosio services stopped.')
 
     def wallet_setup(self):
         """Create Development Wallet
@@ -115,9 +201,10 @@ class CLEOSWrapper:
                     'cleos', 'create', 'account', 'eosio', node.name,
                     self.dev_wallet_pkey, '-p', 'eosio@active'
                 ]
-                ec, out = self.run(cmd)
-                print(f"Account creation: {' '.join(cmd)}")
-                print(out)
+                ec, stdout, stderr = self.run(cmd, demux=True)
+                print(f'Account creation: {" ".join(cmd)}')
+                print(f'stdout: \n{stdout}\n---')
+                print(f'stderr: \n{stderr}\n---')
                 assert ec == 0
 
                 workdir_param = {}
@@ -256,10 +343,20 @@ class CLEOSWrapper:
 def eosio_testnet(dockerctl, request):
     if request.config.getoption("--native"):
         cleos_api = CLEOSWrapper()
-        cleos_api.wallet_setup()
-        cleos_api.deploy_contracts(quick=request.config.getoption("--quick"))
 
-        yield cleos_api
+        try:
+            cleos_api.start_services()
+            cleos_api.wallet_setup()
+            cleos_api.deploy_contracts(quick=request.config.getoption("--quick"))
+            
+            yield cleos_api
+
+            cleos_api.stop_services()
+
+        except BaseException as ex:
+            cleos_api.stop_services()
+            cleos_api.dump_services_output()
+            raise
 
     else:
         contracts_wd = Mount(

@@ -9,28 +9,13 @@ To run tests:
 
 # Native mode:
 
-3 - Run keos & nodeos
-
-	keosd &
-
-	nodeos -e -p eosio \
-          --plugin eosio::producer_plugin \
-          --plugin eosio::producer_api_plugin \
-          --plugin eosio::chain_api_plugin \
-          --plugin eosio::http_plugin \
-          --plugin eosio::history_plugin \
-          --plugin eosio::history_api_plugin \
-          --filter-on="*" \
-          --access-control-allow-origin='*' \
-          --contracts-console \
-          --http-validate-host=false \
-          --verbose-http-errors >> /tmp/nodeos.log 2>&1 &
-
-4 - run tests:
+3 - run tests:
 
 	pytest --native
 
 # Docker mode:
+
+(Docker must be installed and running)
 
 3 - Build docker image from folder:
 
@@ -38,11 +23,7 @@ To run tests:
 	    --build-arg USER_ID=$(id -u) \
 	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
 
-4 - Start docker
-
-	systemctl start docker
-
-5 - run tests:
+4 - run tests:
 
 	pytest
 
