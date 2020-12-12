@@ -357,8 +357,7 @@ def eosio_testnet(dockerctl, request):
 
         with dockerctl.run(
             'guilledk/pytest-eosiocdt:vtestnet-eosio',
-            mounts=[contracts_wd] + _additional_mounts,
-            auto_remove=True
+            mounts=[contracts_wd] + _additional_mounts
         ) as containers:
             cleos_api = CLEOSWrapper(container=containers[0])
             cleos_api.wallet_setup()
