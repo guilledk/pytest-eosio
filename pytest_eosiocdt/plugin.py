@@ -10,6 +10,7 @@ from queue import Queue, Empty
 from typing import Optional
 from pathlib import Path
 from threading  import Thread
+from subprocess import PIPE, STDOUT
 
 import pytest
 import psutil
@@ -52,31 +53,21 @@ class CLEOSWrapper:
 
     def run(self, *args, **kwargs):
         if self.container:
-            if 'demux' in kwargs:
-                ec, outs = self.container.exec_run(*args, **kwargs)
-                stdout, stderr = outs
-                if stdout:
-                    stdout = stdout.decode('utf-8')
-                if stderr:
-                    stderr = stderr.decode('utf-8')
-                return ec, stdout, stderr
-
             ec, out = self.container.exec_run(*args, **kwargs)
             return ec, out.decode('utf-8')
         else:
-            if 'demux' in kwargs:
-                del kwargs['demux']
-                pinfo = subprocess.run(*args, capture_output=True, encoding='utf-8', **kwargs)
-                return pinfo.returncode, pinfo.stdout, pinfo.stderr
-
-            pinfo = subprocess.run(*args, capture_output=True, encoding='utf-8', **kwargs)
+            pinfo = subprocess.run(
+                *args, 
+                stdout=PIPE, stderr=STDOUT, encoding='utf-8',
+                **kwargs
+            )
             return pinfo.returncode, pinfo.stdout
 
     def start_services(self):
         print('starting eosio services...')
         self.proc_keosd = subprocess.Popen(
             ['keosd'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8'
+            stdout=PIPE, stderr=STDOUT, encoding='utf-8'
         )
         print('nodeos start...')
         self.proc_nodeos = subprocess.Popen(
@@ -93,7 +84,7 @@ class CLEOSWrapper:
                 '--contracts-console',
                 '--http-validate-host=false',
                 '--verbose-http-errors'
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8'
+            ], stdout=PIPE, stderr=STDOUT, encoding='utf-8'
         )
 
         def enqueue_output(out, queue):
@@ -101,10 +92,10 @@ class CLEOSWrapper:
                 queue.put(line)
             out.close()
 
-        stderr_queue = Queue()
+        stdout_queue = Queue()
         reader_thread = Thread(
             target=enqueue_output,
-            args=(self.proc_nodeos.stderr, stderr_queue)
+            args=(self.proc_nodeos.stdout, stdout_queue)
         )
         reader_thread.daemon = True
         reader_thread.start()
@@ -114,7 +105,7 @@ class CLEOSWrapper:
         start_time = time.time()
         while not initalized:
             try:
-                line = stderr_queue.get(timeout=0.4)
+                line = stdout_queue.get(timeout=0.4)
             except Empty:
                 if time.time() - start_time > init_timeout:
                     self.stop_services()
@@ -206,10 +197,9 @@ class CLEOSWrapper:
                     'cleos', 'create', 'account', 'eosio', node.name,
                     self.dev_wallet_pkey, '-p', 'eosio@active'
                 ]
-                ec, stdout, stderr = self.run(cmd, demux=True)
+                ec, out = self.run(cmd)
                 print(f'Account creation: {" ".join(cmd)}')
-                print(f'stdout: \n{stdout}\n---')
-                print(f'stderr: \n{stderr}\n---')
+                print(out)
                 assert ec == 0
 
                 workdir_param = {}
@@ -261,24 +251,21 @@ class CLEOSWrapper:
     ):
         print(f"push action: {action}({args}) as {permissions}")
         for i in range(retry):
-            ec, out, err = self.run(
+            ec, out = self.run(
                 [
                     'cleos', 'push', 'action', contract, action,
                     json.dumps(args), '-p', permissions, '-j', '-f'
-                ], demux=True
+                ]
             )
             try:
                 out = json.loads(out)
                 print(json.dumps(out, indent=4, sort_keys=True))
                 
-            except json.JSONDecodeError:
-                print(err)
+            except (json.JSONDecodeError, TypeError):
+                print(out)
 
             if ec == 0:
                 break
-
-        if err and (len(err) > 0):
-            out += err
 
         return ec, out
 
@@ -303,13 +290,10 @@ class CLEOSWrapper:
         name: str,
         key: str,
     ):
-        ec, out, err = self.run(
-            ['cleos', 'create', 'account', owner, name, key],
-            demux=True
-        )
+        ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
         print(out)
         assert ec == 0
-        assert 'warning: transaction executed locally' in err
+        assert 'warning: transaction executed locally' in out
         return ec, out
 
 
@@ -320,14 +304,12 @@ class CLEOSWrapper:
         table: str,
         *args
     ):
-        ec, stdout, stderr = self.run(
-            ['cleos', 'get', 'table', account, scope, table, *args],
-            demux=True
+        ec, out = self.run(
+            ['cleos', 'get', 'table', account, scope, table, *args]
         )
-        if stderr:
-            print(stderr)
+        print(out)
         assert ec == 0
-        return json.loads(stdout)
+        return json.loads(out)
 
     def get_info(self):
         ec, out = self.run(['cleos', 'get', 'info'])
@@ -375,7 +357,8 @@ def eosio_testnet(dockerctl, request):
 
         with dockerctl.run(
             'guilledk/pytest-eosiocdt:vtestnet-eosio',
-            mounts=[contracts_wd] + _additional_mounts
+            mounts=[contracts_wd] + _additional_mounts,
+            auto_remove=True
         ) as containers:
             cleos_api = CLEOSWrapper(container=containers[0])
             cleos_api.wallet_setup()
