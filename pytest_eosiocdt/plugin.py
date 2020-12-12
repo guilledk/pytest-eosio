@@ -55,6 +55,10 @@ class CLEOSWrapper:
             if 'demux' in kwargs:
                 ec, outs = self.container.exec_run(*args, **kwargs)
                 stdout, stderr = outs
+                if stdout:
+                    stdout = stdout.decode('utf-8')
+                if stderr:
+                    stderr = stderr.decode('utf-8')
                 return ec, stdout, stderr
 
             ec, out = self.container.exec_run(*args, **kwargs)
@@ -257,21 +261,24 @@ class CLEOSWrapper:
     ):
         print(f"push action: {action}({args}) as {permissions}")
         for i in range(retry):
-            ec, out = self.run(
+            ec, out, err = self.run(
                 [
                     'cleos', 'push', 'action', contract, action,
                     json.dumps(args), '-p', permissions, '-j', '-f'
-                ]
+                ], demux=True
             )
             try:
                 out = json.loads(out)
                 print(json.dumps(out, indent=4, sort_keys=True))
                 
             except json.JSONDecodeError:
-                print(out)
+                print(err)
 
             if ec == 0:
                 break
+
+        if err and (len(err) > 0):
+            out += err
 
         return ec, out
 
@@ -296,12 +303,13 @@ class CLEOSWrapper:
         name: str,
         key: str,
     ):
-        ec, out = self.run(
-            ['cleos', 'create', 'account', owner, name, key]
+        ec, out, err = self.run(
+            ['cleos', 'create', 'account', owner, name, key],
+            demux=True
         )
         print(out)
         assert ec == 0
-        assert 'warning: transaction executed locally' in out
+        assert 'warning: transaction executed locally' in err
         return ec, out
 
 
