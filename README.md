@@ -9,6 +9,8 @@ To run tests:
 
 # Native mode:
 
+(IMPORTANT: this plugin manages a local single block producer blockchain, this means it manages keosd & nodeos on its own, and requires them to not be running when executing tests)
+
 3 - run tests:
 
 	pytest --native

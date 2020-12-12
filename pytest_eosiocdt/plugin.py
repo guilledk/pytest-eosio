@@ -113,7 +113,8 @@ class CLEOSWrapper:
                 line = stderr_queue.get(timeout=0.4)
             except Empty:
                 if time.time() - start_time > init_timeout:
-                    raise NodeOSException(f'init timeout')
+                    self.stop_services()
+                    raise NodeOSException('init timeout')
                 else:
                     continue
             else:
@@ -354,7 +355,6 @@ def eosio_testnet(dockerctl, request):
             cleos_api.stop_services()
 
         except BaseException as ex:
-            cleos_api.stop_services()
             cleos_api.dump_services_output()
             raise
 
