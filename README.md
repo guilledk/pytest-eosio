@@ -4,45 +4,43 @@ To run tests:
 
 2 - With ``python3`` installed, run:
 
-	pip install -r requirements.txt
-	pip install .
+    pip install -r requirements.txt
+    pip install .
 
 # Native mode:
 
-(IMPORTANT: this plugin manages a local single block producer blockchain, this means it manages keosd & nodeos on its own, and requires them to not be running when executing tests)
+###### (IMPORTANT: this plugin manages a local single block producer blockchain, this means it manages keosd & nodeos on its own, and requires them to not be running when executing tests)
 
 3 - run tests:
 
-	pytest --native
+    pytest --native
 
 # Docker mode:
 
-(Docker must be installed and running)
+###### (IMPORTANT: Docker must be installed and running, ALSO: the first test session the plugin will download the docker image (452mb), so it might take a while)
 
-3 - Build docker image from folder:
+3 - run tests:
 
-	docker build --tag vtestnet:eosio \
-	    --build-arg USER_ID=$(id -u) \
-	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
-
-4 - run tests:
-
-	pytest
+    pytest
 
 
-docker build interactive:
+### Docker development commands
 
-	docker build --tag vtestnet:eosio-inter \
-	    --build-arg USER_ID=$(id -u) \
-	    --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio.interactive
+- docker build:
+         
+    docker build --tag guilledk/pytest-eosiocdt:vtestnet-eosio \
+        --build-arg USER_ID=$(id -u) \
+        --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
 
+- docker push:
 
-docker run interactive:
+    docker push guilledk/pytest-eosiocdt:vtestnet-eosio
 
-	docker run -it --mount type=bind,source="$(pwd)"/contracts,target=/contracts \
-		vtestnet:eosio-inter bash
+- docker stop all:
 
-docker clear:
+    docker stop $(docker ps -q)
 
-	docker rmi $(docker images -a -q)s
-	docker rm $(docker ps -a -q)
+- docker clear:
+
+    docker rmi $(docker images -a -q)
+    docker rm $(docker ps -a -q)

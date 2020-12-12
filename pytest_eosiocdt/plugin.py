@@ -366,7 +366,7 @@ def eosio_testnet(dockerctl, request):
         )
 
         with dockerctl.run(
-            'vtestnet:eosio',
+            'guilledk/pytest-eosiocdt:vtestnet-eosio',
             mounts=[contracts_wd] + _additional_mounts
         ) as containers:
             cleos_api = CLEOSWrapper(container=containers[0])
