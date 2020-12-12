@@ -11,6 +11,7 @@ setup(
 	classifiers=["Framework :: Pytest"],
 	install_requires=[
 		'pytest',
-		'docker'
+		'psutil',
+		'pytest-dockerctl@git+git://github.com/tgoodlet/pytest-dockerctl.git'
 	]
 )

@@ -31,8 +31,7 @@ jobs:
         sudo apt-get install -y ./eosio_2.0.8-1-ubuntu-18.04_amd64.deb
         sudo apt-get install -y ./eosio.cdt_1.7.0-1-ubuntu-18.04_amd64.deb
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install .
+        pip install git+git://github.com/guilledk/pytest-eosiocdt.git
       env:
         DEBIAN_FRONTEND: noninteractive
     - name: Run tests
