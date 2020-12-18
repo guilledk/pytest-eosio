@@ -16,6 +16,7 @@ import pytest
 import psutil
 
 from docker.types import Mount
+from pytest_dockerctl import DockerCtl
 
 
 _additional_mounts = []
@@ -331,7 +332,7 @@ class CLEOSWrapper:
 
 
 @pytest.fixture(scope="session")
-def eosio_testnet(dockerctl, request):
+def eosio_testnet(request):
     if request.config.getoption("--native"):
         cleos_api = CLEOSWrapper()
 
@@ -349,6 +350,10 @@ def eosio_testnet(dockerctl, request):
             raise
 
     else:
+
+        dockerctl = DockerCtl(request.config.option.dockerurl)
+        dockerctl.client.ping()       
+
         contracts_wd = Mount(
             CONTRACTS_ROOTDIR,  # target
             str(Path('contracts').resolve()),  # source
