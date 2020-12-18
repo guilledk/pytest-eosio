@@ -22,7 +22,9 @@ from pytest_dockerctl import DockerCtl
 
 _additional_mounts = []
 
+
 CONTRACTS_ROOTDIR = '/home/user/contracts'
+
 
 def append_mount(target: str, source: str):
     _additional_mounts.append(
@@ -41,7 +43,6 @@ def pytest_addoption(parser):
     parser.addoption(
         "--native", action="store_true", default=False, help="run blockchain outside vm"
     )
-
 
 
 class NodeOSException(Exception):
@@ -67,6 +68,7 @@ class CLEOSWrapper:
 
     def start_services(self):
         logging.info('starting eosio services...')
+        logging.debug('keosd start...')
         self.proc_keosd = subprocess.Popen(
             ['keosd'],
             stdout=PIPE, stderr=STDOUT, encoding='utf-8'
@@ -103,7 +105,7 @@ class CLEOSWrapper:
         reader_thread.start()
 
         initalized = False
-        init_timeout = 5  # seg
+        init_timeout = 15  # seg
         start_time = time.time()
         while not initalized:
             try:
@@ -236,18 +238,12 @@ class CLEOSWrapper:
                     assert ec == 0
 
                     # Build contract
-                    cpu_count = psutil.cpu_count()
-                    logging.debug(f'\t\tmake build -j {cpu_count}')
-                    ec, out = self.run(
-                        ['make', 'build', '-j', str(cpu_count)],
-                        **workdir_param
-                    )
-                    logging.debug("\tbuild:")
+                    cmd = ['make', 'build', '-j', str(psutil.cpu_count())]
+                    logging.debug(f'\t\t{" ".join(cmd)}')
+                    ec, out = self.run(cmd, **workdir_param)
                     logging.debug(out)
                     assert ec == 0
-                else:
-                    logging.debug('skipped build')
-
+    
                 # Deploy
                 logging.debug('deploy...')
                 cmd = [
@@ -366,6 +362,7 @@ def eosio_testnet(request):
             cleos_api.stop_services()
 
         except BaseException as ex:
+            cleos_api.stop_services()
             cleos_api.dump_services_output()
             raise
 
