@@ -4,6 +4,7 @@ import time
 import json
 import string
 import random
+import logging
 import subprocess
 
 from queue import Queue, Empty
@@ -65,12 +66,12 @@ class CLEOSWrapper:
             return pinfo.returncode, pinfo.stdout
 
     def start_services(self):
-        print('starting eosio services...')
+        logging.info('starting eosio services...')
         self.proc_keosd = subprocess.Popen(
             ['keosd'],
             stdout=PIPE, stderr=STDOUT, encoding='utf-8'
         )
-        print('nodeos start...')
+        logging.info('nodeos start...')
         self.proc_nodeos = subprocess.Popen(
             [
                 'nodeos', '-e', '-p', 'eosio',
@@ -107,6 +108,7 @@ class CLEOSWrapper:
         while not initalized:
             try:
                 line = stdout_queue.get(timeout=0.4)
+                logging.debug(line)
             except Empty:
                 if time.time() - start_time > init_timeout:
                     self.stop_services()
@@ -114,31 +116,30 @@ class CLEOSWrapper:
                 else:
                     continue
             else:
-                print(line)
                 initalized = 'Produced' in line
 
-        print('eosio services started.')
+        logging.info('eosio services started.')
 
     def dump_services_output(self):
         outs, errs = self.proc_keosd.communicate(timeout=1)
-        print(f'keosd exit code: {self.proc_keosd.poll()}')
-        print('keosd outs:')
-        print(outs)
-        print('keosd errs:')
-        print(errs)
+        logging.error(f'keosd exit code: {self.proc_keosd.poll()}')
+        logging.error('keosd outs:')
+        logging.error(outs)
+        logging.error('keosd errs:')
+        logging.error(errs)
 
         outs, errs = self.proc_nodeos.communicate(timeout=1)
-        print(f'nodeos exit code: {self.proc_nodeos.poll()}')
-        print('nodeos outs:')
-        print(outs)
-        print('nodeos errs:')
-        print(errs)
+        logging.error(f'nodeos exit code: {self.proc_nodeos.poll()}')
+        logging.error('nodeos outs:')
+        logging.error(outs)
+        logging.error('nodeos errs:')
+        logging.error(errs)
 
     def stop_services(self):
-        print('stopping eosio services...')
+        logging.debug('stopping eosio services...')
         self.proc_nodeos.kill()
         self.proc_keosd.kill()
-        print('eosio services stopped.')
+        logging.debug('eosio services stopped.')
 
     def wallet_setup(self):
         """Create Development Wallet
@@ -147,20 +148,25 @@ class CLEOSWrapper:
         """
 
         # Step 1: Create a Wallet
+        logging.debug('create wallet...')
         ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
         wallet_key = out.split('\n')[-2].strip('\"')
+        logging.debug('walet created')
 
         assert ec == 0
         assert len(wallet_key) == 53
 
         # Step 2: Open the Wallet
+        logging.debug('open wallet...')
         ec, _ = self.run(['cleos', 'wallet', 'open'])
         assert ec == 0
         ec, out = self.run(['cleos', 'wallet', 'list'])
         assert ec == 0
         assert 'default' in out
+        logging.debug('wallet opened')
 
         # Step 3: Unlock it
+        logging.debug('unlock wallet...')
         ec, out = self.run(
             ['cleos', 'wallet', 'unlock', '--password', wallet_key]
         )
@@ -169,19 +175,24 @@ class CLEOSWrapper:
         ec, out = self.run(['cleos', 'wallet', 'list'])
         assert ec == 0
         assert 'default *' in out
+        logging.debug('wallet unlocked')
 
         # Step 4:  Import keys into your wallet
+        logging.debug('import key...')
         ec, out = self.run(['cleos', 'wallet', 'create_key'])
         public_key = out.split('\"')[1]
         assert ec == 0
         assert len(public_key) == 53
         self.dev_wallet_pkey = public_key
+        logging.debug(f'imported {public_key}')
 
         # Step 5: Import the Development Key
+        logging.debug('import development key...')
         ec, out = self.run(
             ['cleos', 'wallet', 'import', '--private-key', '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3']
         )
         assert ec == 0
+        logging.debug('imported dev key')
 
     def deploy_contracts(self, quick: bool = False):
         """Deploy Contracts
@@ -189,19 +200,21 @@ class CLEOSWrapper:
         getting-started/smart-contract-development/hello-world
         """
 
+        logging.debug('start contract deployment...')
         for node in Path('contracts').resolve().glob('*'):
             if node.is_dir():
-                container_dir = f"/home/user/contracts/{node.name}"
+                container_dir = f'/home/user/contracts/{node.name}'
+                logging.debug(f'contract {node.name}:')
 
                 # Create account for contract
+                logging.debug('\tcreate account...')
                 cmd = [
                     'cleos', 'create', 'account', 'eosio', node.name,
                     self.dev_wallet_pkey, '-p', 'eosio@active'
                 ]
                 ec, out = self.run(cmd)
-                print(f'Account creation: {" ".join(cmd)}')
-                print(out)
                 assert ec == 0
+                logging.debug('\taccount created')
 
                 workdir_param = {}
                 if self.container:
@@ -213,7 +226,9 @@ class CLEOSWrapper:
                     build_dir = f'{node_dir}/build'
 
                 if not quick:
+                    logging.debug('\tperform build...')
                     # Clean contract
+                    logging.debug('\t\tmake clean')
                     ec, out = self.run(
                        ['make', 'clean'],
                         **workdir_param
@@ -221,15 +236,20 @@ class CLEOSWrapper:
                     assert ec == 0
 
                     # Build contract
+                    cpu_count = psutil.cpu_count()
+                    logging.debug(f'\t\tmake build -j {cpu_count}')
                     ec, out = self.run(
-                        ['make', 'build', '-j', str(psutil.cpu_count())],
+                        ['make', 'build', '-j', str(cpu_count)],
                         **workdir_param
                     )
-                    print("Build contract:")
-                    print(out)
+                    logging.debug("\tbuild:")
+                    logging.debug(out)
                     assert ec == 0
+                else:
+                    logging.debug('skipped build')
 
                 # Deploy
+                logging.debug('deploy...')
                 cmd = [
                     'cleos', 'set', 'contract', node.name,
                     build_dir,
@@ -238,9 +258,9 @@ class CLEOSWrapper:
                     '-p', f'{node.name}@active'
                 ]
                 ec, out = self.run(cmd)
-                print(f"Contract Deploy: {' '.join(cmd)}")
-                print(out)
+                logging.debug(out)
                 assert ec == 0
+                logging.debug('deployed')
 
     def push_action(
         self,
