@@ -241,15 +241,24 @@ class CLEOSWrapper:
                 if not quick:
                     logging.debug('\tperform build...')
                     # Clean contract
-                    logging.debug('\t\tmake clean')
+                    logging.debug('\t\tclean build')
                     ec, out = self.run(
-                       ['make', 'clean'],
+                       ['rm', '-rf', build_dir]
+                    )
+                    assert ec == 0
+
+                    # Make build dir
+                    logging.debug('\t\tmake build dir')
+                    ec, out = self.run(
+                        ['mkdir', '-p', 'build'],
                         **workdir_param
                     )
                     assert ec == 0
 
                     # Build contract
-                    cmd = ['make', 'build', '-j', str(psutil.cpu_count())]
+                    cflags = ['-I.', '-I../../include', '--abigen']
+                    sources = [n.name for n in node.resolve().glob('*.cpp')]
+                    cmd = ['eosio-cpp', *cflags, '-o', f'build/{node.name}.wasm', *sources]
                     logging.debug(f'\t\t{" ".join(cmd)}')
                     if self.container:
                         ec, out = self.run(cmd, **workdir_param)
