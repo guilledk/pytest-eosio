@@ -59,12 +59,20 @@ class CLEOSWrapper:
             ec, out = self.container.exec_run(*args, **kwargs)
             return ec, out.decode('utf-8')
         else:
-            pinfo = subprocess.run(
-                *args, 
-                stdout=PIPE, stderr=STDOUT, encoding='utf-8',
-                **kwargs
-            )
-            return pinfo.returncode, pinfo.stdout
+            if ('popen' in kwargs) and kwargs['popen']:
+                del kwargs['popen']
+                return subprocess.Popen(
+                    *args,
+                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
+                    **kwargs
+                )
+            else:
+                pinfo = subprocess.run(
+                    *args, 
+                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
+                    **kwargs
+                )
+                return pinfo.returncode, pinfo.stdout
 
     def start_services(self):
         logging.info('starting eosio services...')
@@ -110,7 +118,7 @@ class CLEOSWrapper:
         while not initalized:
             try:
                 line = stdout_queue.get(timeout=0.4)
-                logging.debug(line)
+                logging.debug(line.rstrip())
             except Empty:
                 if time.time() - start_time > init_timeout:
                     self.stop_services()
@@ -224,8 +232,11 @@ class CLEOSWrapper:
                     build_dir = f'{container_dir}/build'
                 else:
                     node_dir = node.resolve()
-                    workdir_param['cwd'] = node_dir
+                    workdir_param['cwd'] = str(node_dir)
                     build_dir = f'{node_dir}/build'
+
+                logging.debug(f'\twork param: {workdir_param}')
+                logging.debug(f'\tbuild dir: \'{build_dir}\'')
 
                 if not quick:
                     logging.debug('\tperform build...')
@@ -240,8 +251,19 @@ class CLEOSWrapper:
                     # Build contract
                     cmd = ['make', 'build', '-j', str(psutil.cpu_count())]
                     logging.debug(f'\t\t{" ".join(cmd)}')
-                    ec, out = self.run(cmd, **workdir_param)
-                    logging.debug(out)
+                    if self.container:
+                        ec, out = self.run(cmd, **workdir_param)
+                        logging.debug(out)
+                    else:
+                        cc_process = self.run(cmd, popen=True, **workdir_param)
+                        for line in iter(lambda: cc_process.stdout.readline(), ''):
+                            logging.debug(f'\t\t\t{line.rstrip()}')
+                            if cc_process.poll():
+                                break
+                        
+                        cc_process.wait(timeout=5)
+                        ec = cc_process.poll()
+
                     assert ec == 0
     
                 # Deploy
