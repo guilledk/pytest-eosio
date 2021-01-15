@@ -8,7 +8,7 @@ import logging
 import subprocess
 
 from queue import Queue, Empty
-from typing import Optional
+from typing import Optional, List, Dict
 from pathlib import Path
 from threading  import Thread
 from subprocess import PIPE, STDOUT
@@ -351,13 +351,19 @@ class CLEOSWrapper:
         scope: str,
         table: str,
         *args
-    ):
-        ec, out = self.run(
-            ['cleos', 'get', 'table', account, scope, table, *args]
-        )
-        print(out)
-        assert ec == 0
-        return json.loads(out)
+    ) -> List[Dict]:
+        done = False
+        rows = []
+        while not done:
+            ec, out = self.run(
+                ['cleos', 'get', 'table', account, scope, table, '-l', '1000', *args]
+            )
+            assert ec == 0
+            out = json.loads(out)
+            rows.extend(out['rows']) 
+            done = not out['more']
+
+        return rows 
 
     def get_info(self):
         ec, out = self.run(['cleos', 'get', 'info'])
