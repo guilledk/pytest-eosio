@@ -383,6 +383,58 @@ class CLEOSWrapper:
         self.create_account('eosio', account_name, public_key)
         return account_name
 
+    """
+    Token helpers
+    """
+    def get_token_stats(self, sym: str) -> Dict:
+        return self.get_table(
+            'eosio.token',
+            sym,
+            'stat'
+        )[0]
+
+    def get_balance(self, account: str) -> str:
+        return self.get_table(
+            'eosio.token',
+            account,
+            'accounts'
+        )[0]['balance']
+
+    def create_token(self, issuer: str, max_supply: str):
+        return self.push_action(
+            'eosio.token',
+            'create',
+            [issuer, max_supply],
+            'eosio.token'
+        )
+
+    def issue_token(
+        self,
+        issuer: str,
+        quantity: str,
+        memo: str
+    ):
+        return self.push_action(
+            'eosio.token',
+            'issue',
+            [issuer, quantity, memo],
+            f'{issuer}@active'
+        )
+
+    def transfer_token(
+        self,
+        _from: str,
+        _to: str,
+        quantity: str,
+        memo: str
+    ):
+        return self.push_action(
+            'eosio.token',
+            'transfer',
+            [_from, _to, quantity, memo],
+            f'{_from}@active'
+        )
+
 
 @pytest.fixture(scope="session")
 def eosio_testnet(request):
