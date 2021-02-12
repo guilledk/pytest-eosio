@@ -226,6 +226,15 @@ class CLEOSWrapper:
                 assert ec == 0
                 logging.info('\taccount created')
 
+                logging.info('\tgive .code permissions...')
+                cmd = [
+                    'cleos', 'set', 'account', 'permission', node.name,
+                    'active', '--add-code'
+                ]
+                ec, out = self.run(cmd)
+                assert ec == 0
+                logging.info('\tpermissions granted.')
+
                 workdir_param = {}
                 if self.container:
                     workdir_param['workdir'] = container_dir
@@ -434,6 +443,13 @@ class CLEOSWrapper:
             [_from, _to, quantity, memo],
             f'{_from}@active'
         )
+
+    def tlos_token_setup(self):
+        max_supply = f'{21000000:.8f} TLOS'
+        ec, _ = self.create_token('eosio.token', max_supply)
+        assert ec == 0
+        ec, _ = self.issue_token('eosio.token', max_supply, 'tlos_token_setup')
+        assert ec == 0
 
 
 @pytest.fixture(scope="session")

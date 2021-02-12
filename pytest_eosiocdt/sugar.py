@@ -4,6 +4,8 @@ import string
 import random
 
 from typing import Dict, Optional
+from pathlib import Path
+from hashlib import sha1
 
 
 def collect_stdout(out: Dict):
@@ -14,6 +16,20 @@ def collect_stdout(out: Dict):
             output += action_trace['console']
 
     return output
+
+
+# SHA-1 hash of file
+def hash_file(path: Path) -> bytes:
+    BUF_SIZE = 65536
+    hasher = sha1()
+    with open(path, 'rb') as target_file:
+        while True:
+            data = target_file.read(BUF_SIZE)
+            if not data:
+                break
+            hasher.update(data)
+
+    return hasher.digest()
 
 
 #
