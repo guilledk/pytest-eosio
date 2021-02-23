@@ -265,7 +265,12 @@ class CLEOSWrapper:
                     assert ec == 0
 
                     # Build contract
-                    cflags = ['-I.', '-I../../include', '--abigen']
+                    cflags = [
+                        '-I.',
+                        '-I../../include',
+                        '-I/usr/opt/eosio.cdt/1.7.0/include/',
+                        '--abigen', '-Wall'
+                    ]
                     sources = [n.name for n in node.resolve().glob('*.cpp')]
                     cmd = ['eosio-cpp', *cflags, '-o', f'build/{node.name}.wasm', *sources]
                     logging.info(f'\t\t{" ".join(cmd)}')
@@ -367,6 +372,8 @@ class CLEOSWrapper:
             ec, out = self.run(
                 ['cleos', 'get', 'table', account, scope, table, '-l', '1000', *args]
             )
+            if ec != 0:
+                logging.critical(out)
             assert ec == 0
             out = json.loads(out)
             rows.extend(out['rows']) 
