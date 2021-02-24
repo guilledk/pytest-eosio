@@ -277,9 +277,13 @@ class CLEOSWrapper:
                     """
 
                     binfo_path = contract_node / '.binfo'
-                    with open(binfo_path, 'r') as build_info:
-                        prev_hash = build_info.read()
-                    
+                    try:
+                        with open(binfo_path, 'r') as build_info:
+                            prev_hash = build_info.read()
+
+                    except FileNotFoundError:
+                        prev_hash = ''
+
                     logging.info(f'prev hash: {prev_hash}')
 
                     # Reopen to truncate contents
