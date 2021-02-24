@@ -12,6 +12,7 @@ setup(
 	install_requires=[
 		'pytest',
 		'psutil',
+                'natsort',
 		'pytest-dockerctl@git+git://github.com/tgoodlet/pytest-dockerctl.git'
 	]
 )

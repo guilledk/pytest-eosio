@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import re
 import time
 import json
 import string
@@ -9,6 +10,7 @@ import subprocess
 
 from queue import Queue, Empty
 from typing import Optional, List, Dict
+from hashlib import sha1
 from pathlib import Path
 from threading  import Thread
 from subprocess import PIPE, STDOUT
@@ -16,8 +18,11 @@ from subprocess import PIPE, STDOUT
 import pytest
 import psutil
 
+from natsort import natsorted
 from docker.types import Mount
 from pytest_dockerctl import DockerCtl
+
+from .sugar import collect_stdout, hash_file
 
 
 _additional_mounts = []
@@ -38,10 +43,13 @@ def append_mount(target: str, source: str):
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--quick", action="store_true", default=False, help="dont't rebuild contract"
+        '--skip-build', action='store_true', default=False, help='dont\'t build contract'
     )
     parser.addoption(
-        "--native", action="store_true", default=False, help="run blockchain outside vm"
+        '--force-build', action='store_true', default=False, help='ignore .binfo files & build all contracts'
+    )
+    parser.addoption(
+        '--native', action='store_true', default=False, help='run blockchain outside vm'
     )
 
 
@@ -204,22 +212,26 @@ class CLEOSWrapper:
         assert ec == 0
         logging.info('imported dev key')
 
-    def deploy_contracts(self, quick: bool = False):
+    def deploy_contracts(
+        self,
+        skip_build: bool = False,
+        force_build: bool = False
+    ):
         """Deploy Contracts
         link: https://developers.eos.io/welcome/latest/
         getting-started/smart-contract-development/hello-world
         """
 
         logging.info('start contract deployment...')
-        for node in Path('contracts').resolve().glob('*'):
-            if node.is_dir():
-                container_dir = f'/home/user/contracts/{node.name}'
-                logging.info(f'contract {node.name}:')
+        for contract_node in Path('contracts').resolve().glob('*'):
+            if contract_node.is_dir():
+                container_dir = f'/home/user/contracts/{contract_node.name}'
+                logging.info(f'contract {contract_node.name}:')
 
                 # Create account for contract
                 logging.info('\tcreate account...')
                 cmd = [
-                    'cleos', 'create', 'account', 'eosio', node.name,
+                    'cleos', 'create', 'account', 'eosio', contract_node.name,
                     self.dev_wallet_pkey, '-p', 'eosio@active'
                 ]
                 ec, out = self.run(cmd)
@@ -228,7 +240,7 @@ class CLEOSWrapper:
 
                 logging.info('\tgive .code permissions...')
                 cmd = [
-                    'cleos', 'set', 'account', 'permission', node.name,
+                    'cleos', 'set', 'account', 'permission', contract_node.name,
                     'active', '--add-code'
                 ]
                 ec, out = self.run(cmd)
@@ -240,63 +252,139 @@ class CLEOSWrapper:
                     workdir_param['workdir'] = container_dir
                     build_dir = f'{container_dir}/build'
                 else:
-                    node_dir = node.resolve()
-                    workdir_param['cwd'] = str(node_dir)
-                    build_dir = f'{node_dir}/build'
+                    contract_node_dir = contract_node.resolve()
+                    workdir_param['cwd'] = str(contract_node_dir)
+                    build_dir = f'{contract_node_dir}/build'
 
                 logging.info(f'\twork param: {workdir_param}')
                 logging.info(f'\tbuild dir: \'{build_dir}\'')
 
-                if not quick:
-                    logging.info('\tperform build...')
-                    # Clean contract
-                    logging.info('\t\tclean build')
-                    ec, out = self.run(
-                       ['rm', '-rf', build_dir]
-                    )
-                    assert ec == 0
+                include_dirs = [
+                    '.',
+                    './include',
+                    '../include',
+                    '../../include',
+                    '/usr/opt/eosio.cdt/1.7.0/include/',
+                ]
 
-                    # Make build dir
-                    logging.info('\t\tmake build dir')
-                    ec, out = self.run(
-                        ['mkdir', '-p', 'build'],
-                        **workdir_param
-                    )
-                    assert ec == 0
+                if not skip_build:
 
-                    # Build contract
-                    cflags = [
-                        '-I.',
-                        '-I../../include',
-                        '-I/usr/opt/eosio.cdt/1.7.0/include/',
-                        '--abigen', '-Wall'
-                    ]
-                    sources = [n.name for n in node.resolve().glob('*.cpp')]
-                    cmd = ['eosio-cpp', *cflags, '-o', f'build/{node.name}.wasm', *sources]
-                    logging.info(f'\t\t{" ".join(cmd)}')
-                    if self.container:
-                        ec, out = self.run(cmd, **workdir_param)
-                        logging.info(out)
-                    else:
-                        cc_process = self.run(cmd, popen=True, **workdir_param)
-                        for line in iter(lambda: cc_process.stdout.readline(), ''):
-                            logging.info(f'\t\t\t{line.rstrip()}')
-                            if cc_process.poll():
-                                break
-                        
-                        cc_process.wait(timeout=5)
-                        ec = cc_process.poll()
+                    """Smart build system: only recompile contracts whose
+                    code as  changed, to do this we hash  every file that
+                    we can find that is used in compilation, we order the
+                    hash list and then use each hash to compute a  global
+                    hash.
+                    """
 
-                    assert ec == 0
+                    binfo_path = contract_node / '.binfo'
+                    with open(binfo_path, 'r') as build_info:
+                        prev_hash = build_info.read()
+                    
+                    logging.info(f'prev hash: {prev_hash}')
+
+                    # Reopen to truncate contents
+                    with open(binfo_path, 'w') as build_info:
+                        hashes = []
+                        files_done = set()
+                        files_todo = {
+                            *[node.resolve() for node in contract_node.glob('*.cpp')],
+                            *[node.resolve() for node in contract_node.glob('*.hpp')],
+                            *[node.resolve() for node in contract_node.glob('*.c')],
+                            *[node.resolve() for node in contract_node.glob('*.h')]
+                        }
+                        while len(files_todo) > 0:
+                            new_todo = set()
+                            for node in files_todo:
+
+                                if node in files_done:
+                                    continue
+
+                                if not node.is_file():
+                                    files_done.add(node)
+                                    continue
+
+                                hashes.append(hash_file(node))
+                                files_done.add(node)
+                                with open(node, 'r') as source_file:
+                                    src_contents = source_file.read()
+
+                                # Find all includes in source & add to todo list
+                                for match in re.findall('(#include )(.+)\n', src_contents):
+                                    assert len(match) == 2
+                                    match = match[1]
+                                    include = match.split('<')
+                                    if len(include) == 1:
+                                        include = match.split('\"')[1]
+                                    else:
+                                        include = include[1].split('>')[0]
+
+                                    for include_path in include_dirs:
+                                        new_path = Path(f'{include_path}/{include}').resolve()
+                                        if new_path in files_done:
+                                            continue
+                                        new_todo.add(new_path)
+                                    
+                                    logging.info(f'found include: {include}')
+
+                            files_todo = new_todo
+
+                        # Order hashes and compute final hash
+                        hasher = sha1()
+                        for file_digest in natsorted(hashes, key=lambda x: x.lower()):
+                            hasher.update(file_digest)
+
+                        current_hash = hasher.hexdigest()
+                        logging.info(f'proyect hash: {current_hash}')
+                        build_info.write(current_hash)
+
+                    if (prev_hash != current_hash) or force_build:
+                        logging.info('\tperform build...')
+                        # Clean contract
+                        logging.info('\t\tclean build')
+                        ec, out = self.run(
+                        ['rm', '-rf', build_dir]
+                        )
+                        assert ec == 0
+
+                        # Make build dir
+                        logging.info('\t\tmake build dir')
+                        ec, out = self.run(
+                            ['mkdir', '-p', 'build'],
+                            **workdir_param
+                        )
+                        assert ec == 0
+
+                        # Build contract
+                        cflags = [
+                            *[f'-I{incl}' for incl in include_dirs],
+                            '--abigen', '-Wall'
+                        ]
+                        sources = [n.name for n in contract_node.resolve().glob('*.cpp')]
+                        cmd = ['eosio-cpp', *cflags, '-o', f'build/{contract_node.name}.wasm', *sources]
+                        logging.info(f'\t\t{" ".join(cmd)}')
+                        if self.container:
+                            ec, out = self.run(cmd, **workdir_param)
+                            logging.info(out)
+                        else:
+                            cc_process = self.run(cmd, popen=True, **workdir_param)
+                            for line in iter(lambda: cc_process.stdout.readline(), ''):
+                                logging.info(f'\t\t\t{line.rstrip()}')
+                                if cc_process.poll():
+                                    break
+                            
+                            cc_process.wait(timeout=5)
+                            ec = cc_process.poll()
+
+                        assert ec == 0
     
                 # Deploy
                 logging.info('deploy...')
                 cmd = [
-                    'cleos', 'set', 'contract', node.name,
+                    'cleos', 'set', 'contract', contract_node.name,
                     build_dir,
-                    f'{node.name}.wasm',
-                    f'{node.name}.abi',
-                    '-p', f'{node.name}@active'
+                    f'{contract_node.name}.wasm',
+                    f'{contract_node.name}.abi',
+                    '-p', f'{contract_node.name}@active'
                 ]
                 ec, out = self.run(cmd)
                 logging.info(out)
@@ -311,7 +399,7 @@ class CLEOSWrapper:
         permissions: str,
         retry: int = 2
     ):
-        print(f"push action: {action}({args}) as {permissions}")
+        logging.info(f"push action: {action}({args}) as {permissions}")
         for i in range(retry):
             ec, out = self.run(
                 [
@@ -321,10 +409,10 @@ class CLEOSWrapper:
             )
             try:
                 out = json.loads(out)
-                print(json.dumps(out, indent=4, sort_keys=True))
+                logging.info(collect_stdout(out))
                 
             except (json.JSONDecodeError, TypeError):
-                print(out)
+                logging.error(f'\n{out}')
 
             if ec == 0:
                 break
@@ -336,14 +424,14 @@ class CLEOSWrapper:
         assert ec == 0
         assert ('Private key' in out) and ('Public key' in out)
         lines = out.split('\n')
-        print(out)
+        logging.info(out)
         return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
 
     def import_key(self, private_key):
         ec, out = self.run(
             ['cleos', 'wallet', 'import', '--private-key', private_key]
         )
-        print(out)
+        logging.info(out)
         return ec
 
     def create_account(
@@ -353,7 +441,7 @@ class CLEOSWrapper:
         key: str,
     ):
         ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
-        print(out)
+        logging.info(out)
         assert ec == 0
         assert 'warning: transaction executed locally' in out
         return ec, out
@@ -459,15 +547,18 @@ class CLEOSWrapper:
         assert ec == 0
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
 def eosio_testnet(request):
-    if request.config.getoption("--native"):
+    if request.config.getoption('--native'):
         cleos_api = CLEOSWrapper()
 
         try:
             cleos_api.start_services()
             cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(quick=request.config.getoption("--quick"))
+            cleos_api.deploy_contracts(
+                skip_build=request.config.getoption('--skip-build'),
+                force_build=request.config.getoption('--force-build')
+            )
             
             yield cleos_api
 
@@ -495,6 +586,9 @@ def eosio_testnet(request):
         ) as containers:
             cleos_api = CLEOSWrapper(container=containers[0])
             cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(quick=request.config.getoption("--quick"))
+            cleos_api.deploy_contracts(
+                skip_build=request.config.getoption('--skip-build'),
+                force_build=request.config.getoption('--force-build')
+            )
         
             yield cleos_api

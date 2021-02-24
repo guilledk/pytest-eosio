@@ -1,3 +1,4 @@
 pytest
 psutil
+natsort
 git+git://github.com/tgoodlet/pytest-dockerctl.git
