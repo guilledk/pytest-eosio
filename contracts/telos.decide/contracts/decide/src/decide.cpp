@@ -32,7 +32,7 @@ ACTION decide::init(string app_version) {
     new_fees[name("committee")] = asset(100000, TLOS_SYM); //100 TLOS
 
     //set default times
-    new_times[name("minballength")] = uint32_t(60); //1 minute in seconds
+    new_times[name("minballength")] = uint32_t(3); //3 seconds MODIFIED FOR TESTING
     new_times[name("balcooldown")] = uint32_t(86400); //1 day in seconds
     new_times[name("forfeittime")] = uint32_t(864000); //10 days in seconds
 

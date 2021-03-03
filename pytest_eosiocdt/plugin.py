@@ -22,7 +22,7 @@ from natsort import natsorted
 from docker.types import Mount
 from pytest_dockerctl import DockerCtl
 
-from .sugar import collect_stdout, hash_file
+from .sugar import collect_stdout, hash_file, random_eosio_name
 
 
 _additional_mounts = []
@@ -256,7 +256,7 @@ class CLEOSWrapper:
                 logging.info(f'\twork param: {workdir_param}')
                 logging.info(f'\tbuild dir: \'{build_dir}\'')
 
-                ec, out = self.run('ls /usr/opt/eosio.contracts')
+                ec, out = self.run(['ls', '/usr/opt/eosio.contracts'])
                 assert ec == 0
 
                 sys_contracts = out.rstrip().split('\n')
@@ -374,9 +374,10 @@ class CLEOSWrapper:
 
                             else:
                                 cmake_args['cwd'] = build_dir
+                                cmake_args['shell'] = True
                                 cmake_args['env'] = {'CXXFLAGS': cxxflags}
-
-                            cmd = ['cmake', '../']
+                            
+                            cmd = ['cmake', build_dir.replace('/build', '')]
                             logging.info(f'\t\t{" ".join(cmd)}')
                             ec, out = self.run(cmd, **cmake_args)
                             logging.info(out)
@@ -455,19 +456,19 @@ class CLEOSWrapper:
         retry: int = 2
     ):
         logging.info(f"push action: {action}({args}) as {permissions}")
+        cmd = [
+            'cleos', 'push', 'action', contract, action,
+            json.dumps(args), '-p', permissions, '-j', '-f'
+        ]
         for i in range(retry):
-            ec, out = self.run(
-                [
-                    'cleos', 'push', 'action', contract, action,
-                    json.dumps(args), '-p', permissions, '-j', '-f'
-                ]
-            )
+            ec, out = self.run(cmd)
             try:
                 out = json.loads(out)
                 logging.info(collect_stdout(out))
                 
             except (json.JSONDecodeError, TypeError):
                 logging.error(f'\n{out}')
+                logging.error(f'cmd line: {cmd}')
 
             if ec == 0:
                 break
@@ -535,10 +536,8 @@ class CLEOSWrapper:
         if name:
             account_name = name
         else:
-            account_name = ''.join(
-                random.choice(string.ascii_lowercase + '12345')
-                for _ in range(12)
-            )
+            account_name = random_eosio_name()
+
         private_key, public_key = self.create_key_pair()
         self.import_key(private_key)
         self.create_account('eosio', account_name, public_key)
@@ -596,21 +595,6 @@ class CLEOSWrapper:
             f'{_from}@active'
         )
 
-    def tlos_token_setup(self):
-        max_supply = f'{21000000:.8f} TLOS'
-        ec, _ = self.create_token('eosio.token', max_supply)
-        assert ec == 0
-        ec, _ = self.issue_token('eosio.token', max_supply, 'tlos_token_setup')
-        assert ec == 0
-
-    def tlos_decide_setup(self, version: str = '2.0.0'):
-        ec, out = self.push_action(
-            'telos.decide',
-            'init',
-            [f'v{version}'],
-            'telos.decide@active'
-        )
-        return ec, out
 
 @pytest.fixture(scope='session')
 def eosio_testnet(request):
