@@ -1,5 +1,6 @@
 .commit
 .python-version
+*.egg-info
 **/.binfo
 **/build
 **/__pycache__

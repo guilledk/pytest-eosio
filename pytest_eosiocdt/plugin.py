@@ -442,10 +442,20 @@ class CLEOSWrapper:
                     abi_file,
                     '-p', f'{contract_node.name}@active'
                 ]
-                ec, out = self.run(cmd)
-                logging.info(out)
-                assert ec == 0
-                logging.info('deployed')
+                retry = 1
+                while retry < 4:
+                    logging.info(f'deplot attempt {retry}')
+
+                    ec, out = self.run(cmd)
+                    logging.info(out)
+                        
+                    if ec == 0:
+                        break
+
+                    retry += 1
+    
+                if ec == 0:
+                    logging.info('deployed')
 
     def push_action(
         self,
@@ -453,7 +463,7 @@ class CLEOSWrapper:
         action: str,
         args: 'List',
         permissions: str,
-        retry: int = 2
+        retry: int = 3
     ):
         logging.info(f"push action: {action}({args}) as {permissions}")
         cmd = [
@@ -546,23 +556,36 @@ class CLEOSWrapper:
     """
     Token helpers
     """
-    def get_token_stats(self, sym: str) -> Dict:
+    def get_token_stats(
+        self,
+        sym: str,
+        token_contract='eosio.token'
+    ) -> Dict:
         return self.get_table(
-            'eosio.token',
+            token_contract,
             sym,
             'stat'
         )[0]
 
-    def get_balance(self, account: str) -> str:
+    def get_balance(
+        self,
+        account: str,
+        token_contract='eosio.token'
+    ) -> str:
         return self.get_table(
-            'eosio.token',
+            token_contract,
             account,
             'accounts'
         )[0]['balance']
 
-    def create_token(self, issuer: str, max_supply: str):
+    def create_token(
+        self,
+        issuer: str,
+        max_supply: str,
+        token_contract='eosio.token'
+    ):
         return self.push_action(
-            'eosio.token',
+            token_contract,
             'create',
             [issuer, max_supply],
             'eosio.token'
@@ -572,10 +595,11 @@ class CLEOSWrapper:
         self,
         issuer: str,
         quantity: str,
-        memo: str
+        memo: str,
+        token_contract='eosio.token'
     ):
         return self.push_action(
-            'eosio.token',
+            token_contract,
             'issue',
             [issuer, quantity, memo],
             f'{issuer}@active'
@@ -586,13 +610,29 @@ class CLEOSWrapper:
         _from: str,
         _to: str,
         quantity: str,
-        memo: str
+        memo: str,
+        token_contract='eosio.token'
     ):
         return self.push_action(
-            'eosio.token',
+            token_contract,
             'transfer',
             [_from, _to, quantity, memo],
             f'{_from}@active'
+        )
+
+    def give_token(
+        self,
+        _to: str,
+        quantity: str,
+        memo: str = '',
+        token_contract='eosio.token'
+    ):
+        return self.transfer_token(
+            token_contract,
+            _to,
+            quantity,
+            memo,
+            token_contract=token_contract
         )
 
 

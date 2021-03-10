@@ -20,6 +20,33 @@ def eosio_parse_date(date: str) -> datetime:
     return datetime.strptime(date, EOSIO_DATE_FORMAT)
 
 
+def string_to_name(s: str) -> int:
+    """Convert valid eosio name to its number repr
+    """
+    i = 0
+    name = 0
+    while i < len(s) :
+        name += (char_to_symbol(s[i]) & 0x1F) << (64-5 * (i + 1))
+        i += 1
+    if i > 12 :
+        name |= char_to_symbol(s[11]) & 0x0F
+    return name
+
+
+def name_to_string(n: int) -> str:
+    """Convert valid eosio name to its ascii repr
+    """
+    charmap = '.12345abcdefghijklmnopqrstuvwxyz'
+    name = ['.'] * 13
+    i = 0
+    while i <= 12:
+        c = charmap[n & (0x0F if i == 0 else 0x1F)]
+        name[12-i] = c
+        n >>= 4 if i == 0 else 5
+        i += 1
+    return ''.join(name).rstrip('.')
+
+
 def collect_stdout(out: Dict):
     assert isinstance(out, dict)
     output = ''

@@ -14,22 +14,29 @@ class SmartContract(ABC):
     def contract_name(self) -> str:
         ...
 
-    def get_table(self, scope: str, table: str):
+    def get_table(
+        self,
+        scope: str, table: str,
+        *args, **kwargs
+    ):
         return self.testnet.get_table(
             self.contract_name,
             scope,
-            table
+            table,
+            *args, **kwargs
         )
 
     def push_action(
         self,
         action: str,
         args: List[str],
-        permissions: str
+        permissions: str,
+        *vargs, **kwargs
     ):
         return self.testnet.push_action(
             self.contract_name,
             action,
             args,
-            permissions
+            permissions,
+            *vargs, **kwargs
         )
