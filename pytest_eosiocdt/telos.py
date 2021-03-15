@@ -61,6 +61,23 @@ class TelosDecide(SmartContract):
             'treasuries'
         )
 
+    def get_treasury(self, sym: str):
+        treasuries = self.get_treasuries()
+        return next((
+            row for row in treasuries
+            if sym in row['max_supply']),
+            None
+        )
+
+    def toggle(self, sym: str, setting: str):
+        treasury = self.get_treasury(sym.split(',')[1])
+        assert treasury is not None
+        return self.push_action(
+            'toggle',
+            [sym, setting],
+            f'{treasury["manager"]}@active'
+        )
+
     def register_voter(
         self,
         voter: str,
@@ -70,6 +87,17 @@ class TelosDecide(SmartContract):
         return self.push_action(
             'regvoter',
             [voter, treasury_sym, referrer],
+            f'{voter}@active'
+        )
+
+    def unregister_voter(
+        self,
+        voter: str,
+        treasury_sym: str
+    ):
+        return self.push_action(
+            'unregvoter',
+            [voter, treasury_sym],
             f'{voter}@active'
         )
 
@@ -89,16 +117,41 @@ class TelosDecide(SmartContract):
         memo: str
     ):
         sym = amount.split(' ')[-1]
-        treasuries = self.get_treasuries()
-        treasury = next((
-            row for row in treasuries
-            if sym in row['max_supply']),
-            None
-        )
+        treasury = self.get_treasury(sym)
         assert treasury is not None
         return self.push_action(
             'mint',
             [to, amount, memo],
+            f'{treasury["manager"]}@active'
+        )
+
+    def burn(
+        self,
+        quantity: str,
+        memo: str
+    ):
+        sym = quantity.split(' ')[-1]
+        treasury = self.get_treasury(sym) 
+        assert treasury is not None
+
+        return self.push_action(
+            'burn',
+            [quantity, memo],
+            f'{treasury["manager"]}@active'
+        )
+
+    def reclaim(
+        self,
+        voter: str,
+        quantity: str,
+        memo: str
+    ):
+        sym = quantity.split(' ')[-1]
+        treasury = self.get_treasury(sym) 
+        assert treasury is not None
+        return self.push_action(
+            'reclaim',
+            [voter, quantity, memo],
             f'{treasury["manager"]}@active'
         )
 
