@@ -53,6 +53,9 @@ def pytest_addoption(parser):
     parser.addoption(
         '--cdt-version', action='store', default='1.6.3', help='set specific eosio cdt version'
     )
+    parser.addoption(
+        '--sys-contracts', action='store', default='none'
+    )
 
 
 class NodeOSException(Exception):
@@ -61,8 +64,15 @@ class NodeOSException(Exception):
 
 class CLEOSWrapper:
 
-    def __init__(self, container: Optional = None):
+    def __init__(
+        self,
+        cdt_version: str,
+        container: Optional = None,
+        sys_contracts: Optional[str] = None
+    ):
         self.container = container
+        self.sys_contracts = sys_contracts
+        self.cdt_version = cdt_version
 
     def run(self, *args, **kwargs):
         if self.container:
@@ -256,21 +266,22 @@ class CLEOSWrapper:
                 logging.info(f'\twork param: {workdir_param}')
                 logging.info(f'\tbuild dir: \'{build_dir}\'')
 
-                ec, out = self.run(['ls', '/usr/opt/eosio.contracts'])
+                ec, out = self.run(['ls', self.sys_contracts])
                 assert ec == 0
 
                 sys_contracts = out.rstrip().split('\n')
+                sys_includes = [
+                    f'{self.sys_contracts}/{contract}/include'
+                    for contract in sys_contracts
+                ] if self.sys_contracts is not None else []
 
                 include_dirs = [
                     '.',
                     './include',
                     '../include',
                     '../../include',
-                    *[
-                        f'/usr/opt/eosio.contracts/{contract}/include'
-                        for contract in sys_contracts
-                    ],
-                    '/usr/opt/eosio.cdt/1.7.0/include/',
+                    *sys_includes#,
+                    # '/usr/opt/eosio.cdt/{self.cdt_version}/include/',
                 ]
 
                 if not skip_build:
@@ -638,8 +649,16 @@ class CLEOSWrapper:
 
 @pytest.fixture(scope='session')
 def eosio_testnet(request):
+    eosio_cdt_v = request.config.getoption('--cdt-version')
+
     if request.config.getoption('--native'):
-        cleos_api = CLEOSWrapper()
+
+        sys_contracts = request.config.getoption('--sys-contracts')
+        sys_contracts = (
+            None if sys_contracts == 'none' else str(Path(sys_contracts).resolve())
+        )
+
+        cleos_api = CLEOSWrapper(eosio_cdt_v, sys_contracts=sys_contracts)
 
         try:
             cleos_api.start_services()
@@ -669,13 +688,16 @@ def eosio_testnet(request):
             'bind'
         )
 
-        eosio_cdt_v = request.config.getoption('--cdt-version')
 
         with dockerctl.run(
             f'guilledk/pytest-eosiocdt:vtestnet-eosio-{eosio_cdt_v}',
             mounts=[contracts_wd] + _additional_mounts
         ) as containers:
-            cleos_api = CLEOSWrapper(container=containers[0])
+            cleos_api = CLEOSWrapper(
+                eosio_cdt_v,
+                container=containers[0],
+                sys_contracts='/usr/opt/eosio.contracts'
+            )
             cleos_api.wallet_setup()
             cleos_api.deploy_contracts(
                 skip_build=request.config.getoption('--skip-build'),
