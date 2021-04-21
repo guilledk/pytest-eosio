@@ -43,14 +43,15 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
             make \
+            cmake \
+            cmake-data \
             build-essential \
             ./eosio_2.0.9-1-ubuntu-18.04_amd64.deb \
             ./eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
-        sudo snap install cmake --classic
-        python -m pip install --upgrade pip
+        pip install --upgrade pip
         pip install git+git://github.com/guilledk/pytest-eosiocdt.git
       env:
         DEBIAN_FRONTEND: noninteractive
     - name: Run tests
       run: |
-        pytest --native
+        pytest --native --sys-contracts=/usr/opt/eosio.contracts

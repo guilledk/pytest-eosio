@@ -4,12 +4,24 @@ import string
 import random
 
 from typing import Dict, Optional
+from decimal import Decimal
 from pathlib import Path
 from hashlib import sha1
 from datetime import datetime
 
 
 EOSIO_DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
+
+
+def asset_from_decimal(dec: Decimal, precision: int, sym: str):
+    result = str(dec)
+    pindex = result.index('.')
+    return f'{result[:pindex + 1 + precision]} {sym}'
+
+
+def asset_from_ints(amount: int, precision: int, sym: str):
+    result = str(amount)
+    return f'{result[:-precision]}.{result[-precision:]} {sym}'
 
 
 def eosio_format_date(date: datetime) -> str:
