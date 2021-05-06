@@ -474,14 +474,14 @@ class CLEOSWrapper:
         action: str,
         args: 'List',
         permissions: str,
-        retry: int = 3
+        retry: int = 2
     ):
         logging.info(f"push action: {action}({args}) as {permissions}")
         cmd = [
             'cleos', 'push', 'action', contract, action,
             json.dumps(args), '-p', permissions, '-j', '-f'
         ]
-        for i in range(retry):
+        for i in range(retry + 1):
             ec, out = self.run(cmd)
             try:
                 out = json.loads(out)
