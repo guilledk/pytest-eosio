@@ -48,9 +48,6 @@ def pytest_addoption(parser):
         '--force-build', action='store_true', default=False, help='ignore .binfo files & build all contracts'
     )
     parser.addoption(
-        '--native', action='store_true', default=False, help='run blockchain outside vm'
-    )
-    parser.addoption(
         '--cdt-version', action='store', default='1.6.3', help='set specific eosio cdt version'
     )
     parser.addoption(
@@ -67,7 +64,7 @@ class CLEOSWrapper:
     def __init__(
         self,
         cdt_version: str,
-        container: Optional = None,
+        container,
         sys_contracts: Optional[str] = None
     ):
         self.container = container
@@ -75,101 +72,8 @@ class CLEOSWrapper:
         self.cdt_version = cdt_version
 
     def run(self, *args, **kwargs):
-        if self.container:
-            ec, out = self.container.exec_run(*args, **kwargs)
-            return ec, out.decode('utf-8')
-        else:
-            if ('popen' in kwargs) and kwargs['popen']:
-                del kwargs['popen']
-                return subprocess.Popen(
-                    *args,
-                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
-                    **kwargs
-                )
-            else:
-                pinfo = subprocess.run(
-                    *args, 
-                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
-                    **kwargs
-                )
-                return pinfo.returncode, pinfo.stdout
-
-    def start_services(self):
-        logging.info('starting eosio services...')
-        logging.info('keosd start...')
-        self.proc_keosd = subprocess.Popen(
-            ['keosd'],
-            stdout=PIPE, stderr=STDOUT, encoding='utf-8'
-        )
-        logging.info('nodeos start...')
-        self.proc_nodeos = subprocess.Popen(
-            [
-                'nodeos', '-e', '-p', 'eosio',
-                '--plugin', 'eosio::producer_plugin',
-                '--plugin', 'eosio::producer_api_plugin',
-                '--plugin', 'eosio::chain_api_plugin',
-                '--plugin', 'eosio::http_plugin',
-                '--plugin', 'eosio::history_plugin',
-                '--plugin', 'eosio::history_api_plugin',
-                '--filter-on=\"*\"',
-                '--access-control-allow-origin=\"*\"',
-                '--contracts-console',
-                '--http-validate-host=false',
-                '--verbose-http-errors'
-            ], stdout=PIPE, stderr=STDOUT, encoding='utf-8'
-        )
-
-        def enqueue_output(out, queue):
-            for line in out:
-                queue.put(line)
-            out.close()
-
-        stdout_queue = Queue()
-        reader_thread = Thread(
-            target=enqueue_output,
-            args=(self.proc_nodeos.stdout, stdout_queue)
-        )
-        reader_thread.daemon = True
-        reader_thread.start()
-
-        initalized = False
-        init_timeout = 15  # seg
-        start_time = time.time()
-        while not initalized:
-            try:
-                line = stdout_queue.get(timeout=0.4)
-                logging.info(line.rstrip())
-            except Empty:
-                if time.time() - start_time > init_timeout:
-                    self.stop_services()
-                    raise NodeOSException('init timeout')
-                else:
-                    continue
-            else:
-                initalized = 'Produced' in line
-
-        logging.info('eosio services started.')
-
-    def dump_services_output(self):
-        outs, errs = self.proc_keosd.communicate(timeout=1)
-        logging.error(f'keosd exit code: {self.proc_keosd.poll()}')
-        logging.error('keosd outs:')
-        logging.error(outs)
-        logging.error('keosd errs:')
-        logging.error(errs)
-
-        outs, errs = self.proc_nodeos.communicate(timeout=1)
-        logging.error(f'nodeos exit code: {self.proc_nodeos.poll()}')
-        logging.error('nodeos outs:')
-        logging.error(outs)
-        logging.error('nodeos errs:')
-        logging.error(errs)
-
-    def stop_services(self):
-        logging.info('stopping eosio services...')
-        self.proc_nodeos.kill()
-        self.proc_keosd.kill()
-        logging.info('eosio services stopped.')
+        ec, out = self.container.exec_run(*args, **kwargs)
+        return ec, out.decode('utf-8')
 
     def wallet_setup(self):
         """Create Development Wallet
@@ -255,13 +159,8 @@ class CLEOSWrapper:
                 logging.info('\tpermissions granted.')
 
                 workdir_param = {}
-                if self.container:
-                    workdir_param['workdir'] = container_dir
-                    build_dir = f'{container_dir}/build'
-                else:
-                    contract_node_dir = contract_node.resolve()
-                    workdir_param['cwd'] = str(contract_node_dir)
-                    build_dir = f'{contract_node_dir}/build'
+                workdir_param['workdir'] = container_dir
+                build_dir = f'{container_dir}/build'
 
                 logging.info(f'\twork param: {workdir_param}')
                 logging.info(f'\tbuild dir: \'{build_dir}\'')
@@ -373,6 +272,7 @@ class CLEOSWrapper:
                             ['mkdir', '-p', 'build'],
                             **workdir_param
                         )
+                        logging.info(out)
                         assert ec == 0
 
                         # Build contract
@@ -408,18 +308,8 @@ class CLEOSWrapper:
                             sources = [n.name for n in contract_node.resolve().glob('*.cpp')]
                             cmd = ['eosio-cpp', *cflags, '-o', f'build/{contract_node.name}.wasm', *sources]
                             logging.info(f'\t\t{" ".join(cmd)}')
-                            if self.container:
-                                ec, out = self.run(cmd, **workdir_param)
-                                logging.info(out)
-                            else:
-                                cc_process = self.run(cmd, popen=True, **workdir_param)
-                                for line in iter(lambda: cc_process.stdout.readline(), ''):
-                                    logging.info(f'\t\t\t{line.rstrip()}')
-                                    if cc_process.poll():
-                                        break
-                                
-                                cc_process.wait(timeout=5)
-                                ec = cc_process.poll()
+                            ec, out = self.run(cmd, **workdir_param)
+                            logging.info(out)
 
                             assert ec == 0
 
@@ -651,57 +541,37 @@ class CLEOSWrapper:
 def eosio_testnet(request):
     eosio_cdt_v = request.config.getoption('--cdt-version')
 
-    if request.config.getoption('--native'):
+    sys_contracts = request.config.getoption('--sys-contracts')
+    sys_contracts = (
+        None if sys_contracts == 'none' else str(Path(sys_contracts).resolve())
+    )
 
-        sys_contracts = request.config.getoption('--sys-contracts')
-        sys_contracts = (
-            None if sys_contracts == 'none' else str(Path(sys_contracts).resolve())
+    dockerctl = DockerCtl(request.config.option.dockerurl)
+    dockerctl.client.ping()       
+
+    # eosio-cpp needs 2 cores or more
+    assert dockerctl.client.info()['NCPU'] > 1
+
+    contracts_wd = Mount(
+        CONTRACTS_ROOTDIR,  # target
+        str(Path('contracts').resolve()),  # source
+        'bind'
+    )
+
+    with dockerctl.run(
+        f'guilledk/pytest-eosiocdt:vtestnet-eosio-{eosio_cdt_v}',
+        mounts=[contracts_wd] + _additional_mounts
+    ) as containers:
+
+        cleos_api = CLEOSWrapper(
+            eosio_cdt_v,
+            container=containers[0],
+            sys_contracts=sys_contracts
         )
-
-        cleos_api = CLEOSWrapper(eosio_cdt_v, sys_contracts=sys_contracts)
-
-        try:
-            cleos_api.start_services()
-            cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(
-                skip_build=request.config.getoption('--skip-build'),
-                force_build=request.config.getoption('--force-build')
-            )
-            
-            yield cleos_api
-
-            cleos_api.stop_services()
-
-        except BaseException as ex:
-            cleos_api.stop_services()
-            cleos_api.dump_services_output()
-            raise
-
-    else:
-
-        dockerctl = DockerCtl(request.config.option.dockerurl)
-        dockerctl.client.ping()       
-
-        contracts_wd = Mount(
-            CONTRACTS_ROOTDIR,  # target
-            str(Path('contracts').resolve()),  # source
-            'bind'
+        cleos_api.wallet_setup()
+        cleos_api.deploy_contracts(
+            skip_build=request.config.getoption('--skip-build'),
+            force_build=request.config.getoption('--force-build')
         )
-
-
-        with dockerctl.run(
-            f'guilledk/pytest-eosiocdt:vtestnet-eosio-{eosio_cdt_v}',
-            mounts=[contracts_wd] + _additional_mounts
-        ) as containers:
-            cleos_api = CLEOSWrapper(
-                eosio_cdt_v,
-                container=containers[0],
-                sys_contracts='/usr/opt/eosio.contracts'
-            )
-            cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(
-                skip_build=request.config.getoption('--skip-build'),
-                force_build=request.config.getoption('--force-build')
-            )
-        
-            yield cleos_api
+    
+        yield cleos_api

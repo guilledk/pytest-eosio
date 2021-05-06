@@ -8,7 +8,8 @@ jobs:
     runs-on: ubuntu-18.04
     strategy:
       matrix:
-        python-version: [3.8]
+        python-version: [3.9]
+        eoscdt-version: ['1.6.3', '1.7.0']
 
     steps:
     - uses: actions/checkout@v2
@@ -16,14 +17,6 @@ jobs:
       uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Download EOSIO
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eos/releases/download/v2.0.9/eosio_2.0.9-1-ubuntu-18.04_amd64.deb
-    - name: Download EOSIO cdt
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eosio.cdt/releases/download/v1.6.3/eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
     - name: Download System Contract Sources
       uses: wei/wget@v1
       with:
@@ -45,13 +38,11 @@ jobs:
             make \
             cmake \
             cmake-data \
-            build-essential \
-            ./eosio_2.0.9-1-ubuntu-18.04_amd64.deb \
-            ./eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
+            build-essential 
         pip install --upgrade pip
         pip install git+git://github.com/guilledk/pytest-eosiocdt.git
       env:
         DEBIAN_FRONTEND: noninteractive
     - name: Run tests
       run: |
-        pytest --native --sys-contracts=/usr/opt/eosio.contracts
+        pytest --sys-contracts=/usr/opt/eosio.contracts --cdt-version=${{ matrix.eoscdt-version }}
