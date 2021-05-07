@@ -1,48 +1,27 @@
-name: pytest-eosiocdt
+name: Service Container Test 
 
 on: [push]
 
 jobs:
   build:
 
-    runs-on: ubuntu-18.04
-    strategy:
-      matrix:
-        python-version: [3.9]
-        eoscdt-version: ['1.6.3', '1.7.0']
+    runs-on: ubuntu-latest 
+
+    services:
+      eosio-chain:
+        image: guilledk/pytest-eosiocdt:vtestnet-eosio
+        ports:
+          - 8888:8888
+
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Download System Contract Sources
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eosio.contracts/archive/v1.8.3.tar.gz -O eosio.contracts.tar.gz
-    - name: Extract System Contracts
-      run: tar xf eosio.contracts.tar.gz
-    - name: Install System Contracts
-      working-directory: ./eosio.contracts-1.8.3
-      run: |
-          sudo mkdir -p /usr/opt/
-          sudo cp -r contracts /usr/opt/eosio.contracts 
-    - name: Cleanup System Contracts install
-      working-directory: /usr/opt/eosio.contracts
-      run: sudo rm -rdf icons CMakeLists.txt
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-            make \
-            cmake \
-            cmake-data \
-            build-essential 
-        pip install --upgrade pip
-        pip install git+git://github.com/guilledk/pytest-eosiocdt.git
-      env:
-        DEBIAN_FRONTEND: noninteractive
-    - name: Run tests
-      run: |
-        pytest --sys-contracts=/usr/opt/eosio.contracts --cdt-version=${{ matrix.eoscdt-version }}
+      - name: Install curl
+        run: sudo apt-get install -y curl jq
+      - name: Get Blockchain info
+        run: |
+          curl http://localhost:8888/v1/chain/get_info | jq
+          echo "::set-output name=server-version::$(curl http://localhost:8888/v1/chain/get_info -s | jq '.server_version')\n"
+        id: get_info
+      - name: Run test
+        run: if [ "${{ steps.get_info.server-version }}" = "null" ]; then exit 1; fi
+

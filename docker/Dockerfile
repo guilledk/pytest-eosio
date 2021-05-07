@@ -10,30 +10,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # https://developers.eos.io/welcome/latest/getting-started/development-environment/introduction
 
-RUN apt-get update && apt-get install -y build-essential wget make cmake python3
+RUN apt-get update && apt-get install -y wget
 
 RUN wget https://github.com/EOSIO/eos/releases/download/v2.0.9/eosio_2.0.9-1-ubuntu-18.04_amd64.deb
 
-RUN wget https://github.com/EOSIO/eosio.cdt/releases/download/v1.6.3/eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
-
 RUN apt-get install -y ./eosio_2.0.9-1-ubuntu-18.04_amd64.deb
-
-RUN apt-get install -y ./eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
-
-RUN wget https://github.com/EOSIO/eosio.contracts/archive/v1.8.3.tar.gz -O eosio.contracts.tar.gz
-RUN tar xf eosio.contracts.tar.gz
-WORKDIR /eosio.contracts-1.8.3
-RUN cp -r contracts /usr/opt/eosio.contracts
-WORKDIR /usr/opt/eosio.contracts
-RUN rm -rdf icons CMakeLists.txt
-WORKDIR /
-
-# ENV CC=eosio-cc
-# ENV CXX=eosio-cpp
 
 COPY entrypoint.sh /
 
 USER user
+
+EXPOSE 8888
 
 ENTRYPOINT ["/entrypoint.sh"]
 

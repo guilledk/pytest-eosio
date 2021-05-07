@@ -1,0 +1,23 @@
+name: pytest-eosiocdt
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: alpine
+
+    services:
+      image: guilledk/pytest-eosiocdt:vtestnet-eosio
+      ports:
+        - 8888:8888
+
+    steps:
+      - name: Install curl
+        run: apk add --no-cache curl jq
+      - name: Get Blockchain info
+        run: echo "::set-output name=server-version::$(curl http://localhost:8888/v1/chain/get_info -s | jq '.server_version')\n"
+        id: get_info
+      - name: Run test
+        run: if [ "${{ steps.get_info.server-version }}" = "null" ]; then exit 1; fi
+

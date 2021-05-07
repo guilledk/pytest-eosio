@@ -24,4 +24,4 @@ nodeos -e -p eosio \
 --http-validate-host=false \
 --verbose-http-errors >> /tmp/nodeos.log 2>&1 &
 
-bash
+sleep 9999999999
