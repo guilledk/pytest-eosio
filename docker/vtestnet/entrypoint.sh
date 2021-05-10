@@ -18,6 +18,7 @@ nodeos -e -p eosio \
 --plugin eosio::history_api_plugin \
 --http-server-address='0.0.0.0:8888' \
 --p2p-listen-endpoint='0.0.0.0:9876' \
+--abi-serializer-max-time-ms=50000 \
 --filter-on="*" \
 --access-control-allow-origin='*' \
 --contracts-console \

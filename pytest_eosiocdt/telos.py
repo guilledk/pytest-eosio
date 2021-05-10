@@ -4,7 +4,7 @@ from typing import List
 
 import pytest
 
-from .plugin import CLEOSWrapper
+from .plugin import EOSIOTestSession
 from .contract import SmartContract
 
 
@@ -235,7 +235,7 @@ def telosdecide(eosio_testnet):
 
 
 _token_init = False
-def init_telos_token(api: CLEOSWrapper):
+def init_telos_token(api: EOSIOTestSession):
     global _token_init
     if not _token_init:
         _token_init = True

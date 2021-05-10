@@ -8,39 +8,33 @@ import random
 import logging
 import subprocess
 
-from queue import Queue, Empty
 from typing import Optional, List, Dict
 from hashlib import sha1
 from pathlib import Path
-from threading  import Thread
+from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
+from contextlib import ExitStack
 
 import pytest
 import psutil
 
 from natsort import natsorted
+from eospy.keys import EOSKey
+from eospy.cleos import Cleos
 from docker.types import Mount
-from pytest_dockerctl import DockerCtl
+from docker.errors import NotFound
+from pytest_dockerctl import DockerCtl, waitfor
 
 from .sugar import collect_stdout, hash_file, random_eosio_name
 
 
-_additional_mounts = []
-
-
-CONTRACTS_ROOTDIR = '/home/user/contracts'
-
-def append_mount(target: str, source: str):
-    _additional_mounts.append(
-        Mount(
-            target,
-            str(Path(source).resolve()),
-            'bind'
-        )
-    )
+DEV_KEY = EOSKey('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
 
 
 def pytest_addoption(parser):
+    parser.addoption(
+        '--endpoint', action='store', default='', help='blockchain api endpoint to target'
+    )
     parser.addoption(
         '--skip-build', action='store_true', default=False, help='dont\'t build contract'
     )
@@ -49,33 +43,42 @@ def pytest_addoption(parser):
     )
 
 
-class CLEOSWrapper:
+class EOSIOTestSession:
 
-    def build_contracts(
+    def __init__(
         self,
-        request,
-        force_build: bool = False
+        vtestnet,  # vtestnet container
+        request,  # pytest session config
+        dockerctl: DockerCtl,
+        docker_mounts: List[Mount]
     ):
+        endpoint = request.config.getoption('--endpoint')
+        if endpoint:
+            self.endpoint = endpoint
+        else:
+            ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
+            container_port = ports[0]['HostPort']
+
+            self.endpoint = f'http://localhost:{container_port}'
+
+        self.skip_build = request.config.getoption('--skip-build')
+        self.force_build = request.config.getoption('--force-build')
+
+        self.api = Cleos(url=self.endpoint)
+
+        self.dockerctl = dockerctl
+        self.docker_mounts = docker_mounts
+
+        self.user_keys = dict()
+
+    def build_contracts(self):
         """Build Contracts
         link: https://developers.eos.io/welcome/latest/
         getting-started/smart-contract-development/hello-world
         """
-
-        dockerctl = DockerCtl(request.config.option.dockerurl)
-        dockerctl.client.ping() 
-
-        if dockerctl.client.info()['NCPU'] < 2:
-            logging.warning('eosio-cpp needs at least 2 logical cores')
-
-        contracts_wd = Mount(
-            CONTRACTS_ROOTDIR,  # target
-            str(Path('contracts').resolve()),  # source
-            'bind'
-        )
-
-        with dockerctl.run(
+        with self.dockerctl.run(
             'guilledk/pytest-eosiocdt:cdt',
-            mounts=[contracts_wd] + _additional_mounts
+            mounts=self.docker_mounts
         ) as containers:
 
             def run(*args, **kwargs):
@@ -176,7 +179,7 @@ class CLEOSWrapper:
                         logging.info(f'proyect hash: {current_hash}')
                         build_info.write(current_hash)
 
-                    if (prev_hash != current_hash) or force_build:
+                    if (prev_hash != current_hash) or self.force_build:
                         logging.info('\tperform build...')
                         # Clean contract
                         logging.info('\t\tclean build')
@@ -197,21 +200,23 @@ class CLEOSWrapper:
                         # Build contract
                         if (contract_node / Path('CMakeLists.txt')).is_file():  # CMake
                             cxxflags = ' '.join([f'-I{incl}' for incl in include_dirs])
-                         
+                        
+                            cmd = ['cmake', work_dir]
                             logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(
-                                ['cmake', build_dir.replace('/build', '')],
+                            ec, out = run(
+                                cmd,
                                 workdir=build_dir,
-                                envoirment={'CXXFLAGS': cxxflags}
+                                environment={'CXXFLAGS': cxxflags}
                             )
                             logging.info(out)
                             assert ec == 0
 
+                            cmd = ['make', f'-j{psutil.cpu_count()}']
                             logging.info(f'\t\t{" ".join(cmd)}')
                             ec, out = run(
-                                ['make', f'-j{psutil.cpu_count()}'],
+                                cmd,
                                 workdir=build_dir,
-                                envoirment={'CXXFLAGS': cxxflags}
+                                environment={'CXXFLAGS': cxxflags}
                             )
                             logging.info(out)
                             assert ec == 0
@@ -226,64 +231,47 @@ class CLEOSWrapper:
                             logging.info(f'\t\t{" ".join(cmd)}')
                             ec, out = run(
                                 cmd,
-                                workdir=build_dir,
-                                envoirment={'CXXFLAGS': cxxflags}
+                                workdir=work_dir,
+                                environment={'CXXFLAGS': cxxflags}
                             )
                             logging.info(out)
 
                             assert ec == 0
 
     def deploy_contracts(self):
-        for contract_node in Path('contracts').resolve().glob('*'):
-            if contract_node.is_dir():
-                container_dir = f'/home/user/contracts/{contract_node.name}'
-                logging.info(f'contract {contract_node.name}:')
+        contracts = [
+            node
+            for node in Path('contracts').glob('*')
+            if node.is_dir()
+        ]
+        for contract in contracts:
+            logging.info(f'contract {contract.name}:')
 
-                build_dir = f'{container_dir}/build'
-                # Deploy
-                # Find all .wasm files and assume .abi is there as well
-                ec, out = self.run(
-                    ['find', build_dir, '-type', 'f', '-name', '*.wasm']
-                )
-                logging.info(f'wasm candidates:\n{out}')
-                wasm_location = None
-                wasm_file = None
-                abi_file = None
-                for matching_file in out.rstrip().split('\n'):
-                    splt_path = matching_file.split('/')
-                    filename = splt_path[-1]
-                    stem = filename.split('.')[0]
+            # Fuzzy match all .wasm files, select one most similar to {contract.name} 
+            matches = sorted([
+                (match, SequenceMatcher(None, contract.name, match.stem).ratio())
+                for match in contract.glob('**/*.wasm')
+            ], key=lambda m: m[1], reverse=True)
+            if len(matches) == 0: 
+                raise FileNotFoundError(
+                    f'Couldn\'t find {contract.name}.wasm')
+            match = matches[0]
 
-                    if stem in contract_node.name:
-                        wasm_location = '/'.join(splt_path[:-1])
-                        wasm_file = matching_file
-                        abi_file = matching_file.replace('.wasm', '.abi')
+            wasm_path = str(match[0].resolve())
+            abi_path = wasm_path.replace('.wasm', '.abi')
 
-                logging.info('deploy...')
-                logging.info(f'wasm loc: {wasm_location}')
-                logging.info(f'wasm: {wasm_file}')
-                logging.info(f'abi: {abi_file}')
-                cmd = [
-                    'cleos', 'set', 'contract', contract_node.name,
-                    wasm_location,
-                    wasm_file,
-                    abi_file,
-                    '-p', f'{contract_node.name}@active'
-                ]
-                retry = 1
-                while retry < 4:
-                    logging.info(f'deplot attempt {retry}')
+            self.create_account(contract.name)
 
-                    ec, out = self.run(cmd)
-                    logging.info(out)
-                        
-                    if ec == 0:
-                        break
+    def __enter__(self):
+        if not self.skip_build:
+            self.build_contracts()
+        
+        self.deploy_contracts()
 
-                    retry += 1
-    
-                if ec == 0:
-                    logging.info('deployed')
+        return self
+
+    def __exit__(self, type, value, traceback):
+        ...
 
     def push_action(
         self,
@@ -313,33 +301,31 @@ class CLEOSWrapper:
 
         return ec, out
 
-    def create_key_pair(self):
-        ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
-        assert ec == 0
-        assert ('Private key' in out) and ('Public key' in out)
-        lines = out.split('\n')
-        logging.info(out)
-        return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
-
-    def import_key(self, private_key):
-        ec, out = self.run(
-            ['cleos', 'wallet', 'import', '--private-key', private_key]
-        )
-        logging.info(out)
-        return ec
-
     def create_account(
         self,
-        owner: str,
         name: str,
-        key: Optional[str] = None,
+        owner_key: Optional[EOSKey] = None,
+        active_key: Optional[EOSKey] = None,
+        creator: str = 'eosio',
+        creator_key: EOSKey = DEV_KEY,
     ):
-        if not key:
-            key = self.dev_wallet_pkey
-        ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
-        logging.info(out)
-        assert ec == 0
-        assert 'warning: transaction executed locally' in out
+        self.user_keys[name] = {
+            'owner': owner_key if owner_key else self.api.create_key(),
+            'active': active_key if active_key else self.api.create_key()
+        }
+
+        data = self.api.create_account(
+            creator,
+            creator_key.to_wif(),
+            name,
+            self.user_keys[name]['owner'].to_public(),
+            active_key=self.user_keys[name]['active'].to_public()
+        )
+
+        breakpoint()
+
+        ec = 1
+        out = ''
         return ec, out
 
 
@@ -464,16 +450,51 @@ class CLEOSWrapper:
         )
 
 
+_additional_mounts = []
+
+CONTRACTS_ROOTDIR = '/home/user/contracts'
+
+def append_mount(target: str, source: str):
+    _additional_mounts.append(
+        Mount(
+            target,
+            str(Path(source).resolve()),
+            'bind'
+        )
+    )
+
+
 @pytest.fixture(scope='session')
 def eosio_testnet(request):
-    cleos_api = CLEOSWrapper()
 
-    if not request.config.getoption('--skip-build'):
-        cleos_api.build_contracts(
-            request,
-            force_build=request.config.getoption('--force-build')
+    dockerctl = DockerCtl(request.config.option.dockerurl)
+    dockerctl.client.ping()
+    
+    docker_mounts = [
+        Mount(
+            CONTRACTS_ROOTDIR,  # target
+            str(Path('contracts').resolve()),  # source
+            'bind'
         )
+    ] + _additional_mounts  
 
-    cleos_api.deploy_contracts()
+    if dockerctl.client.info()['NCPU'] < 2:
+        logging.warning('eosio-cpp needs at least 2 logical cores')
+   
+    with ExitStack() as stack:
+        try:
+            container = dockerctl.client.containers.get('guilledk/pytest-eosiocdt:vtestnet')
 
-    yield cleos_api
+        except NotFound:
+            containers = stack.enter_context(
+                dockerctl.run(
+                    'guilledk/pytest-eosiocdt:vtestnet',
+                    mounts=docker_mounts,
+                    publish_all_ports=True
+                )
+            )
+            container = containers[0]
+        
+        yield stack.enter_context(
+            EOSIOTestSession(container, request, dockerctl, docker_mounts)
+        )
