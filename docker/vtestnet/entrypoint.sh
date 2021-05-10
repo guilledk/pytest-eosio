@@ -1,9 +1,7 @@
 #!/bin/bash
 
-"""Start keosd and nodeos
-link: https://docs.telos.net/developers/platform/
-development-environment/start-your-node-setup
-"""
+# Start keosd and nodeos
+# link: https://docs.telos.net/developers/platform/development-environment/start-your-node-setup
 
 set -e
 
@@ -18,6 +16,8 @@ nodeos -e -p eosio \
 --plugin eosio::http_plugin \
 --plugin eosio::history_plugin \
 --plugin eosio::history_api_plugin \
+--http-server-address='0.0.0.0:8888' \
+--p2p-listen-endpoint='0.0.0.0:9876' \
 --filter-on="*" \
 --access-control-allow-origin='*' \
 --contracts-console \

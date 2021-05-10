@@ -28,13 +28,11 @@ To run tests:
 
 - docker build:
          
-    docker build --tag guilledk/pytest-eosiocdt:vtestnet-eosio \
-        --build-arg USER_ID=$(id -u) \
-        --build-arg GROUP_ID=$(id -g) docker/vtestnet-eosio
+    docker build --tag guilledk/pytest-eosiocdt:  docker/
 
 - docker push:
 
-    docker push guilledk/pytest-eosiocdt:vtestnet-eosio
+    docker push guilledk/pytest-eosiocdt:
 
 - docker stop all:
 

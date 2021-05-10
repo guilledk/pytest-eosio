@@ -47,143 +47,62 @@ def pytest_addoption(parser):
     parser.addoption(
         '--force-build', action='store_true', default=False, help='ignore .binfo files & build all contracts'
     )
-    parser.addoption(
-        '--cdt-version', action='store', default='1.6.3', help='set specific eosio cdt version'
-    )
-    parser.addoption(
-        '--sys-contracts', action='store', default='none'
-    )
-
-
-class NodeOSException(Exception):
-    ...
 
 
 class CLEOSWrapper:
 
-    def __init__(
+    def build_contracts(
         self,
-        cdt_version: str,
-        container,
-        sys_contracts: Optional[str] = None
-    ):
-        self.container = container
-        self.sys_contracts = sys_contracts
-        self.cdt_version = cdt_version
-
-    def run(self, *args, **kwargs):
-        ec, out = self.container.exec_run(*args, **kwargs)
-        return ec, out.decode('utf-8')
-
-    def wallet_setup(self):
-        """Create Development Wallet
-        link: https://docs.telos.net/developers/platform/
-        development-environment/create-development-wallet
-        """
-
-        # Step 1: Create a Wallet
-        logging.info('create wallet...')
-        ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
-        wallet_key = out.split('\n')[-2].strip('\"')
-        logging.info('walet created')
-
-        assert ec == 0
-        assert len(wallet_key) == 53
-
-        # Step 2: Open the Wallet
-        logging.info('open wallet...')
-        ec, _ = self.run(['cleos', 'wallet', 'open'])
-        assert ec == 0
-        ec, out = self.run(['cleos', 'wallet', 'list'])
-        assert ec == 0
-        assert 'default' in out
-        logging.info('wallet opened')
-
-        # Step 3: Unlock it
-        logging.info('unlock wallet...')
-        ec, out = self.run(
-            ['cleos', 'wallet', 'unlock', '--password', wallet_key]
-        )
-        assert ec == 0
-
-        ec, out = self.run(['cleos', 'wallet', 'list'])
-        assert ec == 0
-        assert 'default *' in out
-        logging.info('wallet unlocked')
-
-        # Step 4:  Import keys into your wallet
-        logging.info('import key...')
-        ec, out = self.run(['cleos', 'wallet', 'create_key'])
-        public_key = out.split('\"')[1]
-        assert ec == 0
-        assert len(public_key) == 53
-        self.dev_wallet_pkey = public_key
-        logging.info(f'imported {public_key}')
-
-        # Step 5: Import the Development Key
-        logging.info('import development key...')
-        ec, out = self.run(
-            ['cleos', 'wallet', 'import', '--private-key', '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3']
-        )
-        assert ec == 0
-        logging.info('imported dev key')
-
-    def deploy_contracts(
-        self,
-        skip_build: bool = False,
+        request,
         force_build: bool = False
     ):
-        """Deploy Contracts
+        """Build Contracts
         link: https://developers.eos.io/welcome/latest/
         getting-started/smart-contract-development/hello-world
         """
 
-        logging.info('start contract deployment...')
-        for contract_node in Path('contracts').resolve().glob('*'):
-            if contract_node.is_dir():
-                container_dir = f'/home/user/contracts/{contract_node.name}'
-                logging.info(f'contract {contract_node.name}:')
+        dockerctl = DockerCtl(request.config.option.dockerurl)
+        dockerctl.client.ping() 
 
-                # Create account for contract
-                logging.info('\tcreate account...')
-                self.create_account('eosio', contract_node.name)
-                logging.info('\taccount created')
+        if dockerctl.client.info()['NCPU'] < 2:
+            logging.warning('eosio-cpp needs at least 2 logical cores')
 
-                logging.info('\tgive .code permissions...')
-                cmd = [
-                    'cleos', 'set', 'account', 'permission', contract_node.name,
-                    'active', '--add-code'
-                ]
-                ec, out = self.run(cmd)
-                assert ec == 0
-                logging.info('\tpermissions granted.')
+        contracts_wd = Mount(
+            CONTRACTS_ROOTDIR,  # target
+            str(Path('contracts').resolve()),  # source
+            'bind'
+        )
 
-                workdir_param = {}
-                workdir_param['workdir'] = container_dir
-                build_dir = f'{container_dir}/build'
+        with dockerctl.run(
+            'guilledk/pytest-eosiocdt:cdt',
+            mounts=[contracts_wd] + _additional_mounts
+        ) as containers:
 
-                logging.info(f'\twork param: {workdir_param}')
-                logging.info(f'\tbuild dir: \'{build_dir}\'')
+            def run(*args, **kwargs):
+                ec, out = containers[0].exec_run(*args, **kwargs)
+                return ec, out.decode('utf-8')
 
-                ec, out = self.run(['ls', self.sys_contracts])
-                assert ec == 0
+            sys_contracts_path = '/usr/opt/eosio.contracts'
 
-                sys_contracts = out.rstrip().split('\n')
-                sys_includes = [
-                    f'{self.sys_contracts}/{contract}/include'
-                    for contract in sys_contracts
-                ] if self.sys_contracts is not None else []
+            for contract_node in Path('contracts').resolve().glob('*'):
+                if contract_node.is_dir():
+                    work_dir = f'/home/user/contracts/{contract_node.name}'
+                    build_dir = f'{work_dir}/build'
 
-                include_dirs = [
-                    '.',
-                    './include',
-                    '../include',
-                    '../../include',
-                    *sys_includes#,
-                    # '/usr/opt/eosio.cdt/{self.cdt_version}/include/',
-                ]
+                    ec, out = run(['ls', sys_contracts_path])
+                    assert ec == 0
 
-                if not skip_build:
+                    sys_contracts = out.rstrip().split('\n')
+                    include_dirs = [
+                        '.',
+                        './include',
+                        '../include',
+                        '../../include',
+                        *[
+                            f'{sys_contracts_path}/{contract}/include'
+                            for contract in sys_contracts
+                        ]
+                    ]
 
                     """Smart build system: only recompile contracts whose
                     code as  changed, to do this we hash  every file that
@@ -261,42 +180,39 @@ class CLEOSWrapper:
                         logging.info('\tperform build...')
                         # Clean contract
                         logging.info('\t\tclean build')
-                        ec, out = self.run(
-                        ['rm', '-rf', build_dir]
+                        ec, out = run(
+                            ['rm', '-rf', build_dir]
                         )
                         assert ec == 0
 
                         # Make build dir
                         logging.info('\t\tmake build dir')
-                        ec, out = self.run(
+                        ec, out = run(
                             ['mkdir', '-p', 'build'],
-                            **workdir_param
+                            workdir=work_dir
                         )
                         logging.info(out)
                         assert ec == 0
 
                         # Build contract
                         if (contract_node / Path('CMakeLists.txt')).is_file():  # CMake
-                            cmake_args = {}
                             cxxflags = ' '.join([f'-I{incl}' for incl in include_dirs])
-                            if self.container:
-                                cmake_args['workdir'] = build_dir
-                                cmake_args['environment'] = {'CXXFLAGS': cxxflags}
-
-                            else:
-                                cmake_args['cwd'] = build_dir
-                                cmake_args['shell'] = True
-                                cmake_args['env'] = {'CXXFLAGS': cxxflags}
-                            
-                            cmd = ['cmake', build_dir.replace('/build', '')]
+                         
                             logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(cmd, **cmake_args)
+                            ec, out = self.run(
+                                ['cmake', build_dir.replace('/build', '')],
+                                workdir=build_dir,
+                                envoirment={'CXXFLAGS': cxxflags}
+                            )
                             logging.info(out)
                             assert ec == 0
 
-                            cmd = ['make', f'-j{psutil.cpu_count()}']
                             logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(cmd, **cmake_args)
+                            ec, out = run(
+                                ['make', f'-j{psutil.cpu_count()}'],
+                                workdir=build_dir,
+                                envoirment={'CXXFLAGS': cxxflags}
+                            )
                             logging.info(out)
                             assert ec == 0
 
@@ -308,11 +224,22 @@ class CLEOSWrapper:
                             sources = [n.name for n in contract_node.resolve().glob('*.cpp')]
                             cmd = ['eosio-cpp', *cflags, '-o', f'build/{contract_node.name}.wasm', *sources]
                             logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(cmd, **workdir_param)
+                            ec, out = run(
+                                cmd,
+                                workdir=build_dir,
+                                envoirment={'CXXFLAGS': cxxflags}
+                            )
                             logging.info(out)
 
                             assert ec == 0
 
+    def deploy_contracts(self):
+        for contract_node in Path('contracts').resolve().glob('*'):
+            if contract_node.is_dir():
+                container_dir = f'/home/user/contracts/{contract_node.name}'
+                logging.info(f'contract {contract_node.name}:')
+
+                build_dir = f'{container_dir}/build'
                 # Deploy
                 # Find all .wasm files and assume .abi is there as well
                 ec, out = self.run(
@@ -539,39 +466,14 @@ class CLEOSWrapper:
 
 @pytest.fixture(scope='session')
 def eosio_testnet(request):
-    eosio_cdt_v = request.config.getoption('--cdt-version')
+    cleos_api = CLEOSWrapper()
 
-    sys_contracts = request.config.getoption('--sys-contracts')
-    sys_contracts = (
-        None if sys_contracts == 'none' else str(Path(sys_contracts).resolve())
-    )
-
-    dockerctl = DockerCtl(request.config.option.dockerurl)
-    dockerctl.client.ping()       
-
-    # eosio-cpp needs 2 cores or more
-    assert dockerctl.client.info()['NCPU'] > 1
-
-    contracts_wd = Mount(
-        CONTRACTS_ROOTDIR,  # target
-        str(Path('contracts').resolve()),  # source
-        'bind'
-    )
-
-    with dockerctl.run(
-        f'guilledk/pytest-eosiocdt:vtestnet-eosio-{eosio_cdt_v}',
-        mounts=[contracts_wd] + _additional_mounts
-    ) as containers:
-
-        cleos_api = CLEOSWrapper(
-            eosio_cdt_v,
-            container=containers[0],
-            sys_contracts=sys_contracts
-        )
-        cleos_api.wallet_setup()
-        cleos_api.deploy_contracts(
-            skip_build=request.config.getoption('--skip-build'),
+    if not request.config.getoption('--skip-build'):
+        cleos_api.build_contracts(
+            request,
             force_build=request.config.getoption('--force-build')
         )
-    
-        yield cleos_api
+
+    cleos_api.deploy_contracts()
+
+    yield cleos_api
