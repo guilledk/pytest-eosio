@@ -1,20 +1,21 @@
-name: pytest-eosiocdt
+name: Service Container Test
 
 on: [push]
 
 jobs:
   build:
 
-    runs-on: alpine
+    runs-on: ubuntu-latest
 
     services:
-      image: guilledk/pytest-eosiocdt:vtestnet-eosio
-      ports:
-        - 8888:8888
+      eosio-chain:
+        image: guilledk/pytest-eosiocdt:vtestnet-eosio
+        ports:
+          - 8888:8888
 
     steps:
       - name: Install curl
-        run: apk add --no-cache curl jq
+        run: sudo apt-get install -y curl jq
       - name: Get Blockchain info
         run: echo "::set-output name=server-version::$(curl http://localhost:8888/v1/chain/get_info -s | jq '.server_version')\n"
         id: get_info

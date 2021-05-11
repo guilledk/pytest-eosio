@@ -19,16 +19,11 @@ import pytest
 import psutil
 
 from natsort import natsorted
-from eospy.keys import EOSKey
-from eospy.cleos import Cleos
 from docker.types import Mount
 from docker.errors import NotFound
 from pytest_dockerctl import DockerCtl, waitfor
 
 from .sugar import collect_stdout, hash_file, random_eosio_name
-
-
-DEV_KEY = EOSKey('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
 
 
 def pytest_addoption(parser):
@@ -64,12 +59,15 @@ class EOSIOTestSession:
         self.skip_build = request.config.getoption('--skip-build')
         self.force_build = request.config.getoption('--force-build')
 
-        self.api = Cleos(url=self.endpoint)
-
+        self.vtestnet = vtestnet
         self.dockerctl = dockerctl
         self.docker_mounts = docker_mounts
 
         self.user_keys = dict()
+
+    def run(self, *args, **kwargs):
+        ec, out = self.vtestnet.exec_run(*args, **kwargs)
+        return ec, out.decode('utf-8')
 
     def build_contracts(self):
         """Build Contracts
@@ -247,22 +245,138 @@ class EOSIOTestSession:
         for contract in contracts:
             logging.info(f'contract {contract.name}:')
 
+            # Create account for contract
+            logging.info('\tcreate account...')
+            self.create_account('eosio', contract.name)
+            logging.info('\taccount created')
+
+            logging.info('\tgive .code permissions...')
+            cmd = [
+                'cleos', 'set', 'account', 'permission', contract.name,
+                'active', '--add-code'
+            ]
+            ec, out = self.run(cmd)
+            assert ec == 0
+            logging.info('\tpermissions granted.')
+
+            build_dir = f'/home/user/contracts/{contract.name}/build'
+
+            ec, out = self.run(
+                ['find', build_dir, '-type', 'f', '-name', '*.wasm']
+            )
+            logging.info(f'wasm candidates:\n{out}')
+            wasms = out.rstrip().split('\n')
+
             # Fuzzy match all .wasm files, select one most similar to {contract.name} 
-            matches = sorted([
-                (match, SequenceMatcher(None, contract.name, match.stem).ratio())
-                for match in contract.glob('**/*.wasm')
-            ], key=lambda m: m[1], reverse=True)
+            matches = sorted(
+                [Path(wasm) for wasm in wasms],
+                key=lambda match: SequenceMatcher(
+                    None, contract.name, match.stem).ratio(),
+                reverse=True
+            )
             if len(matches) == 0: 
                 raise FileNotFoundError(
                     f'Couldn\'t find {contract.name}.wasm')
-            match = matches[0]
 
-            wasm_path = str(match[0].resolve())
-            abi_path = wasm_path.replace('.wasm', '.abi')
+            wasm_path = matches[0]
+            wasm_file = str(wasm_path).split('/')[-1]
+            abi_file = wasm_file.replace('.wasm', '.abi')
 
-            self.create_account(contract.name)
+            logging.info('deploy...')
+            logging.info(f'wasm path: {wasm_path}')
+            logging.info(f'wasm: {wasm_file}')
+            logging.info(f'abi: {abi_file}')
+            cmd = [
+                'cleos', 'set', 'contract', contract.name,
+                str(wasm_path.parent),
+                wasm_file,
+                abi_file,
+                '-p', f'{contract.name}@active'
+            ]
+            retry = 1
+            while retry < 4:
+                logging.info(f'deplot attempt {retry}')
+
+                ec, out = self.run(cmd)
+                logging.info(out)
+                    
+                if ec == 0:
+                    break
+
+                retry += 1
+
+            if ec == 0:
+                logging.info('deployed')
+
+    def create_key_pair(self):
+        ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
+        assert ec == 0
+        assert ('Private key' in out) and ('Public key' in out)
+        lines = out.split('\n')
+        logging.info(out)
+        return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
+
+    def import_key(self, private_key):
+        ec, out = self.run(
+            ['cleos', 'wallet', 'import', '--private-key', private_key]
+        )
+        logging.info(out)
+        return ec
+
+    def setup_wallet(self):
+        """Create Development Wallet
+        link: https://docs.telos.net/developers/platform/
+        development-environment/create-development-wallet
+        """
+
+        # Step 1: Create a Wallet
+        logging.info('create wallet...')
+        ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
+        wallet_key = out.split('\n')[-2].strip('\"')
+        logging.info('wallet created')
+
+        assert ec == 0
+        assert len(wallet_key) == 53
+
+        # Step 2: Open the Wallet
+        logging.info('open wallet...')
+        ec, _ = self.run(['cleos', 'wallet', 'open'])
+        assert ec == 0
+        ec, out = self.run(['cleos', 'wallet', 'list'])
+        assert ec == 0
+        assert 'default' in out
+        logging.info('wallet opened')
+
+        # Step 3: Unlock it
+        logging.info('unlock wallet...')
+        ec, out = self.run(
+            ['cleos', 'wallet', 'unlock', '--password', wallet_key]
+        )
+        assert ec == 0
+
+        ec, out = self.run(['cleos', 'wallet', 'list'])
+        assert ec == 0
+        assert 'default *' in out
+        logging.info('wallet unlocked')
+
+        # Step 4:  Import keys into your wallet
+        logging.info('import key...')
+        ec, out = self.run(['cleos', 'wallet', 'create_key'])
+        public_key = out.split('\"')[1]
+        assert ec == 0
+        assert len(public_key) == 53
+        self.dev_wallet_pkey = public_key
+        logging.info(f'imported {public_key}')
+
+        # Step 5: Import the Development Key
+        logging.info('import development key...')
+        ec = self.import_key('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
+        assert ec == 0
+        logging.info('imported dev key')
 
     def __enter__(self):
+        self.setup_wallet()
+
         if not self.skip_build:
             self.build_contracts()
         
@@ -303,29 +417,16 @@ class EOSIOTestSession:
 
     def create_account(
         self,
+        owner: str,
         name: str,
-        owner_key: Optional[EOSKey] = None,
-        active_key: Optional[EOSKey] = None,
-        creator: str = 'eosio',
-        creator_key: EOSKey = DEV_KEY,
+        key: Optional[str] = None,
     ):
-        self.user_keys[name] = {
-            'owner': owner_key if owner_key else self.api.create_key(),
-            'active': active_key if active_key else self.api.create_key()
-        }
-
-        data = self.api.create_account(
-            creator,
-            creator_key.to_wif(),
-            name,
-            self.user_keys[name]['owner'].to_public(),
-            active_key=self.user_keys[name]['active'].to_public()
-        )
-
-        breakpoint()
-
-        ec = 1
-        out = ''
+        if not key:
+            key = self.dev_wallet_pkey
+        ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
+        logging.info(out)
+        assert ec == 0
+        assert 'warning: transaction executed locally' in out
         return ec, out
 
 

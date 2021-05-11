@@ -1,4 +1,4 @@
-name: Service Container Test 
+name: Pytest Tests
 
 on: [push]
 
@@ -13,15 +13,17 @@ jobs:
         ports:
           - 8888:8888
 
-
     steps:
-      - name: Install curl
-        run: sudo apt-get install -y curl jq
-      - name: Get Blockchain info
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
         run: |
-          curl http://localhost:8888/v1/chain/get_info | jq
-          echo "::set-output name=server-version::$(curl http://localhost:8888/v1/chain/get_info -s | jq '.server_version')\n"
-        id: get_info
-      - name: Run test
-        run: if [ "${{ steps.get_info.server-version }}" = "null" ]; then exit 1; fi
+          pip install --upgrade pip
+          pip install git+git://github.com/guilledk/pytest-eosiocdt.git
+      - name: Run tests
+        run: |
+            pytest
 
