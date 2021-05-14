@@ -13,7 +13,12 @@ RUN apt-get update && apt-get install -yq \
     libssl-dev              \
     libusb-1.0-0-dev        \
     pkg-config              \
-    wget
+    wget                    \
+    curl
+
+RUN curl https://wasmtime.dev/install.sh -sSf | bash
+
+ENV WASMTIME_HOME=/root/.wasmtime
 
 WORKDIR /opt
 
@@ -23,13 +28,27 @@ RUN tar xf wasi-sdk-12.0-linux.tar.gz
 RUN wget https://github.com/eoscommunity/Eden/releases/download/sdk-v0.0.2-alpha/clsdk-ubuntu-20-04.tar.gz
 RUN tar xf clsdk-ubuntu-20-04.tar.gz
 
-ENV WASI_SDK_PREFIX=/opt/wasi-sdk-12.0
-ENV WASI_SYSROOT=/opt/wasi-sdk-12.0/share/wasi-sysroot
-ENV CLSDK_PREFIX=/opt/clsdk
+WORKDIR /root/tmp
 
+ENV WASI_SDK_PREFIX=/opt/wasi-sdk-12.0
+ENV WASI_SYSROOT=$WASI_SDK_PREFIX/share/wasi-sysroot
+ENV CLSDK_PREFIX=/opt/clsdk
 ENV PATH=$CLSDK_PREFIX/bin:$PATH
 
-ENV CC=/opt/wasi-sdk-12.0/bin/clang
-ENV CXX=/opt/wasi-sdk-12.0/bin/clang++
+ENV CC=$WASI_SDK_PREFIX/bin/clang
+ENV AR=$WASI_SDK_PREFIX/bin/llvm-ar
+ENV CXX=$WASI_SDK_PREFIX/bin/clang++
+ENV RANLIB=$WASI_SDK_PREFIX/bin/llvm-ranlib
+
 ENV CFLAGS="--sysroot=$WASI_SYSROOT -D_WASI_EMULATED_SIGNAL"
+ENV CXXFLAGS="--sysroot=$WASI_SYSROOT -fno-exceptions"
 ENV LDFLAGS=-lwasi-emulated-signal
+
+ENV GMP_PREFIX=/opt/gmp-wasi
+ENV NTL_PREFIX=/opt/ntl-wasi
+
+COPY install-gmp.sh .
+RUN ./install-gmp.sh
+
+COPY install-ntl.sh .
+RUN ./install-ntl.sh
