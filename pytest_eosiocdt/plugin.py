@@ -69,6 +69,92 @@ class EOSIOTestSession:
         ec, out = self.vtestnet.exec_run(*args, **kwargs)
         return ec, out.decode('utf-8')
 
+    def build_contract(
+        self,
+        cdt,
+        contract_name,
+        work_dir,
+        includes=[]
+    ):
+
+        def run(*args, **kwargs):
+            ec, out = cdt.exec_run(*args, **kwargs)
+            return ec, out.decode('utf-8')
+
+        logging.info('\tperform build...')
+        # Clean contract
+        logging.info('\t\tclean build')
+        ec, out = run(
+            ['rm', '-rf', f'{work_dir}/build']
+        )
+        assert ec == 0
+
+        # Make build dir
+        logging.info('\t\tmake build dir')
+        ec, out = run(
+            ['mkdir', '-p', 'build'],
+            workdir=work_dir
+        )
+        logging.info(out)
+        assert ec == 0
+
+        # Build contract
+        _, is_cmake = run([
+            'sh',
+            '-c',
+            f'test -f {work_dir}/CMakeLists.txt && echo True'
+        ])
+        if is_cmake == 'True\n':  #CMake
+            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
+        
+            cmd = ['cmake', work_dir]
+            logging.info(f'\t\t{" ".join(cmd)}')
+            ec, out = run(
+                cmd,
+                workdir=f'{work_dir}/build',
+                environment={'CXXFLAGS': cxxflags}
+            )
+            logging.info(out)
+            assert ec == 0
+
+            cmd = ['make', f'-j{psutil.cpu_count()}']
+            logging.info(f'\t\t{" ".join(cmd)}')
+            ec, out = run(
+                cmd,
+                workdir=f'{work_dir}/build',
+                environment={'CXXFLAGS': cxxflags}
+            )
+            logging.info(out)
+            breakpoint()
+            assert ec == 0
+
+        else:  # Custom build
+            assert contract_name
+            cxxflags = [
+                *[f'-I{incl}' for incl in includes],
+                '--abigen', '-Wall'
+            ]
+            ec, sources = run(
+                ['find', '.', '-type', 'f',
+                    '-name', '*.cpp', '-o',
+                    '-name', '*.cc', '-o',
+                    '-name', '*.c'],
+                workdir=work_dir
+            )
+            sources = sources.split('\n') 
+            cmd = [
+                'eosio-cpp', *cxxflags, '-o', f'build/{contract_name}.wasm', *sources
+            ]
+            logging.info(f'\t\t{" ".join(cmd)}')
+            ec, out = run(
+                cmd,
+                workdir=work_dir,
+                environment={'CXXFLAGS': cxxflags}
+            )
+            logging.info(out)
+
+            assert ec == 0
+
     def build_contracts(self):
         """Build Contracts
         link: https://developers.eos.io/welcome/latest/
@@ -83,27 +169,43 @@ class EOSIOTestSession:
                 ec, out = containers[0].exec_run(*args, **kwargs)
                 return ec, out.decode('utf-8')
 
-            sys_contracts_path = '/usr/opt/eosio.contracts'
+            # build system contracts
+            sys_contracts_path = '/usr/opt/telos.contracts'
+            ec, out = run(['sh', '-c', f'cd {sys_contracts_path}/contracts && echo */'])
+            assert ec == 0
 
+            sys_contracts = [path[:-1] for path in out.split(' ')]
+            include_dirs = [
+                '.',
+                './include',
+                '../include',
+                '../../include',
+                *[
+                    f'{sys_contracts_path}/contracts/{contract}/include'
+                    for contract in sys_contracts
+                ]
+            ]
+            self.build_contract(
+                containers[0], None, sys_contracts_path, includes=include_dirs
+            )
+            # for contract in sys_contracts:
+            #     ec, out = run([
+            #         'sh',
+            #         '-c',
+            #         f'test -f {sys_contracts_path}/{contract}/CMakeLists.txt && echo True'
+            #     ])
+            #     if ec == 0 and out == 'True\n':
+            #         self.build_contract(
+            #             containers[0],
+            #             contract,
+            #             f'{sys_contracts_path}/{contract}',
+            #             includes=include_dirs
+            #         )
+
+            # build user contracts
             for contract_node in Path('contracts').resolve().glob('*'):
                 if contract_node.is_dir():
                     work_dir = f'/home/user/contracts/{contract_node.name}'
-                    build_dir = f'{work_dir}/build'
-
-                    ec, out = run(['ls', sys_contracts_path])
-                    assert ec == 0
-
-                    sys_contracts = out.rstrip().split('\n')
-                    include_dirs = [
-                        '.',
-                        './include',
-                        '../include',
-                        '../../include',
-                        *[
-                            f'{sys_contracts_path}/{contract}/include'
-                            for contract in sys_contracts
-                        ]
-                    ]
 
                     """Smart build system: only recompile contracts whose
                     code as  changed, to do this we hash  every file that
@@ -178,63 +280,76 @@ class EOSIOTestSession:
                         build_info.write(current_hash)
 
                     if (prev_hash != current_hash) or self.force_build:
-                        logging.info('\tperform build...')
-                        # Clean contract
-                        logging.info('\t\tclean build')
-                        ec, out = run(
-                            ['rm', '-rf', build_dir]
+                        self.build_contract(
+                            containers[0],
+                            contract_node.name,
+                            work_dir,
+                            includes=include_dirs
                         )
-                        assert ec == 0
 
-                        # Make build dir
-                        logging.info('\t\tmake build dir')
-                        ec, out = run(
-                            ['mkdir', '-p', 'build'],
-                            workdir=work_dir
-                        )
-                        logging.info(out)
-                        assert ec == 0
+    def deploy_contract(self, contract_name, build_dir):
+        logging.info(f'contract {contract_name}:')
 
-                        # Build contract
-                        if (contract_node / Path('CMakeLists.txt')).is_file():  # CMake
-                            cxxflags = ' '.join([f'-I{incl}' for incl in include_dirs])
-                        
-                            cmd = ['cmake', work_dir]
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = run(
-                                cmd,
-                                workdir=build_dir,
-                                environment={'CXXFLAGS': cxxflags}
-                            )
-                            logging.info(out)
-                            assert ec == 0
+        # Create account for contract
+        logging.info('\tcreate account...')
+        self.create_account('eosio', contract_name)
+        logging.info('\taccount created')
 
-                            cmd = ['make', f'-j{psutil.cpu_count()}']
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = run(
-                                cmd,
-                                workdir=build_dir,
-                                environment={'CXXFLAGS': cxxflags}
-                            )
-                            logging.info(out)
-                            assert ec == 0
+        logging.info('\tgive .code permissions...')
+        cmd = [
+            'cleos', 'set', 'account', 'permission', contract_name,
+            'active', '--add-code'
+        ]
+        ec, out = self.run(cmd)
+        assert ec == 0
+        logging.info('\tpermissions granted.')
 
-                        else:  # Custom build
-                            cflags = [
-                                *[f'-I{incl}' for incl in include_dirs],
-                                '--abigen', '-Wall'
-                            ]
-                            sources = [n.name for n in contract_node.resolve().glob('*.cpp')]
-                            cmd = ['eosio-cpp', *cflags, '-o', f'build/{contract_node.name}.wasm', *sources]
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = run(
-                                cmd,
-                                workdir=work_dir,
-                                environment={'CXXFLAGS': cxxflags}
-                            )
-                            logging.info(out)
+        ec, out = self.run(
+            ['find', build_dir, '-type', 'f', '-name', '*.wasm']
+        )
+        logging.info(f'wasm candidates:\n{out}')
+        wasms = out.rstrip().split('\n')
 
-                            assert ec == 0
+        # Fuzzy match all .wasm files, select one most similar to {contract.name} 
+        matches = sorted(
+            [Path(wasm) for wasm in wasms],
+            key=lambda match: SequenceMatcher(
+                None, contract_name, match.stem).ratio(),
+            reverse=True
+        )
+        if len(matches) == 0: 
+            raise FileNotFoundError(
+                f'Couldn\'t find {contract.name}.wasm')
+
+        wasm_path = matches[0]
+        wasm_file = str(wasm_path).split('/')[-1]
+        abi_file = wasm_file.replace('.wasm', '.abi')
+
+        logging.info('deploy...')
+        logging.info(f'wasm path: {wasm_path}')
+        logging.info(f'wasm: {wasm_file}')
+        logging.info(f'abi: {abi_file}')
+        cmd = [
+            'cleos', 'set', 'contract', contract_name,
+            str(wasm_path.parent),
+            wasm_file,
+            abi_file,
+            '-p', f'{contract_name}@active'
+        ]
+        retry = 1
+        while retry < 4:
+            logging.info(f'deplot attempt {retry}')
+
+            ec, out = self.run(cmd)
+            logging.info(out)
+                
+            if ec == 0:
+                break
+
+            retry += 1
+
+        if ec == 0:
+            logging.info('deployed')
 
     def deploy_contracts(self):
         contracts = [
@@ -243,70 +358,10 @@ class EOSIOTestSession:
             if node.is_dir()
         ]
         for contract in contracts:
-            logging.info(f'contract {contract.name}:')
-
-            # Create account for contract
-            logging.info('\tcreate account...')
-            self.create_account('eosio', contract.name)
-            logging.info('\taccount created')
-
-            logging.info('\tgive .code permissions...')
-            cmd = [
-                'cleos', 'set', 'account', 'permission', contract.name,
-                'active', '--add-code'
-            ]
-            ec, out = self.run(cmd)
-            assert ec == 0
-            logging.info('\tpermissions granted.')
-
-            build_dir = f'/home/user/contracts/{contract.name}/build'
-
-            ec, out = self.run(
-                ['find', build_dir, '-type', 'f', '-name', '*.wasm']
+            self.deploy_contract(
+                contract.name,
+                f'/home/user/contracts/{contract.name}/build'
             )
-            logging.info(f'wasm candidates:\n{out}')
-            wasms = out.rstrip().split('\n')
-
-            # Fuzzy match all .wasm files, select one most similar to {contract.name} 
-            matches = sorted(
-                [Path(wasm) for wasm in wasms],
-                key=lambda match: SequenceMatcher(
-                    None, contract.name, match.stem).ratio(),
-                reverse=True
-            )
-            if len(matches) == 0: 
-                raise FileNotFoundError(
-                    f'Couldn\'t find {contract.name}.wasm')
-
-            wasm_path = matches[0]
-            wasm_file = str(wasm_path).split('/')[-1]
-            abi_file = wasm_file.replace('.wasm', '.abi')
-
-            logging.info('deploy...')
-            logging.info(f'wasm path: {wasm_path}')
-            logging.info(f'wasm: {wasm_file}')
-            logging.info(f'abi: {abi_file}')
-            cmd = [
-                'cleos', 'set', 'contract', contract.name,
-                str(wasm_path.parent),
-                wasm_file,
-                abi_file,
-                '-p', f'{contract.name}@active'
-            ]
-            retry = 1
-            while retry < 4:
-                logging.info(f'deplot attempt {retry}')
-
-                ec, out = self.run(cmd)
-                logging.info(out)
-                    
-                if ec == 0:
-                    break
-
-                retry += 1
-
-            if ec == 0:
-                logging.info('deployed')
 
     def create_key_pair(self):
         ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
@@ -456,6 +511,13 @@ class EOSIOTestSession:
         ec, out = self.run(['cleos', 'get', 'info'])
         assert ec == 0
         return json.loads(out)
+
+    def get_resources(self, account: str):
+        return self.get_table(
+            'eosio.system',
+            account,
+            'userres'
+        )
 
     def new_account(self, name: Optional[str] = None):
         if name:
