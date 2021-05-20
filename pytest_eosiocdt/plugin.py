@@ -6,6 +6,7 @@ import json
 import string
 import random
 import logging
+import tarfile
 import subprocess
 
 from typing import Optional, List, Dict
@@ -17,6 +18,7 @@ from contextlib import ExitStack
 
 import pytest
 import psutil
+import requests
 
 from natsort import natsorted
 from docker.types import Mount
@@ -24,6 +26,9 @@ from docker.errors import NotFound
 from pytest_dockerctl import DockerCtl, waitfor
 
 from .sugar import collect_stdout, hash_file, random_eosio_name
+
+
+PLUGIN_PREFIX = 'contracts/.pytest-eosiocdt'
 
 
 def pytest_addoption(parser):
@@ -64,6 +69,11 @@ class EOSIOTestSession:
         self.docker_mounts = docker_mounts
 
         self.user_keys = dict()
+
+        self.sys_contracts_path = '/usr/opt/telos.contracts'
+        self.sys_contracts = []
+
+        self._sys_token_init = False
 
     def run(self, *args, **kwargs):
         ec, out = self.vtestnet.exec_run(*args, **kwargs)
@@ -125,7 +135,6 @@ class EOSIOTestSession:
                 environment={'CXXFLAGS': cxxflags}
             )
             logging.info(out)
-            breakpoint()
             assert ec == 0
 
         else:  # Custom build
@@ -165,46 +174,33 @@ class EOSIOTestSession:
             mounts=self.docker_mounts
         ) as containers:
 
+            cdt = containers[0]
+
             def run(*args, **kwargs):
-                ec, out = containers[0].exec_run(*args, **kwargs)
+                ec, out = cdt.exec_run(*args, **kwargs)
                 return ec, out.decode('utf-8')
 
-            # build system contracts
-            sys_contracts_path = '/usr/opt/telos.contracts'
-            ec, out = run(['sh', '-c', f'cd {sys_contracts_path}/contracts && echo */'])
+            ec, out = run(
+                ['sh', '-c', 'echo */'],
+                workdir=f'{self.sys_contracts_path}/contracts'
+            )
             assert ec == 0
-
-            sys_contracts = [path[:-1] for path in out.split(' ')]
+            self.sys_contracts = [path[:path.find('/')] for path in out.split(' ')]
             include_dirs = [
                 '.',
                 './include',
                 '../include',
                 '../../include',
                 *[
-                    f'{sys_contracts_path}/contracts/{contract}/include'
-                    for contract in sys_contracts
+                    f'{self.sys_contracts_path}/contracts/{contract}/include'
+                    for contract in self.sys_contracts
                 ]
             ]
-            self.build_contract(
-                containers[0], None, sys_contracts_path, includes=include_dirs
-            )
-            # for contract in sys_contracts:
-            #     ec, out = run([
-            #         'sh',
-            #         '-c',
-            #         f'test -f {sys_contracts_path}/{contract}/CMakeLists.txt && echo True'
-            #     ])
-            #     if ec == 0 and out == 'True\n':
-            #         self.build_contract(
-            #             containers[0],
-            #             contract,
-            #             f'{sys_contracts_path}/{contract}',
-            #             includes=include_dirs
-            #         )
 
             # build user contracts
             for contract_node in Path('contracts').resolve().glob('*'):
-                if contract_node.is_dir():
+                if (contract_node.is_dir() and
+                        contract_node.name != '.pytest-eosiocdt'):
                     work_dir = f'/home/user/contracts/{contract_node.name}'
 
                     """Smart build system: only recompile contracts whose
@@ -287,17 +283,73 @@ class EOSIOTestSession:
                             includes=include_dirs
                         )
 
-    def deploy_contract(self, contract_name, build_dir):
+            # save sys contracts wasm & abi from cdt container
+            plugin_path = Path(PLUGIN_PREFIX)
+            plugin_path.mkdir(exist_ok=True)
+
+            for contract in self.sys_contracts:
+                try:
+                    (plugin_path / contract).mkdir()
+                except FileExistsError:
+                    continue
+
+                with open(plugin_path / contract / 'wasm.tar', 'wb') as f_wasm:
+                    bits, stat = cdt.get_archive(
+                        f'{self.sys_contracts_path}/contracts/{contract}/{contract}.wasm'
+                    )
+                    for chunk in bits:
+                        f_wasm.write(chunk)
+
+                with tarfile.open(
+                    plugin_path / contract / 'wasm.tar', mode='r:'
+                ) as tar_wasm:
+                    tar_wasm.extractall(path=plugin_path / contract)
+                Path(plugin_path / contract / 'wasm.tar').unlink()
+
+                with open(plugin_path / contract / 'abi.tar', 'wb') as f_abi:
+                    bits, stat = cdt.get_archive(
+                        f'{self.sys_contracts_path}/contracts/{contract}/{contract}.abi'
+                    )
+                    for chunk in bits:
+                        f_abi.write(chunk)
+
+                with tarfile.open(
+                    plugin_path / contract / 'abi.tar', mode='r:'
+                ) as tar_abi:
+                    tar_abi.extractall(path=plugin_path / contract)
+                Path(plugin_path / contract / 'abi.tar').unlink()
+
+    def deploy_contract(
+        self,
+        contract_name,
+        build_dir,
+        privileged=False,
+        account_name=None,
+        create_account=True,
+        staked=True
+    ):
         logging.info(f'contract {contract_name}:')
 
-        # Create account for contract
-        logging.info('\tcreate account...')
-        self.create_account('eosio', contract_name)
-        logging.info('\taccount created')
+        account_name = contract_name if not account_name else account_name
+
+        if create_account:
+            logging.info('\tcreate account...')
+            if staked:
+                self.create_account_staked('eosio', account_name)
+            else:
+                self.create_account('eosio', account_name)
+            logging.info('\taccount created')
+
+        if privileged:
+            self.push_action(
+                'eosio', 'setpriv',
+                [account_name, 1],
+                'eosio@active'
+            )
 
         logging.info('\tgive .code permissions...')
         cmd = [
-            'cleos', 'set', 'account', 'permission', contract_name,
+            'cleos', 'set', 'account', 'permission', account_name,
             'active', '--add-code'
         ]
         ec, out = self.run(cmd)
@@ -319,7 +371,7 @@ class EOSIOTestSession:
         )
         if len(matches) == 0: 
             raise FileNotFoundError(
-                f'Couldn\'t find {contract.name}.wasm')
+                f'Couldn\'t find {contract_name}.wasm')
 
         wasm_path = matches[0]
         wasm_file = str(wasm_path).split('/')[-1]
@@ -330,11 +382,11 @@ class EOSIOTestSession:
         logging.info(f'wasm: {wasm_file}')
         logging.info(f'abi: {abi_file}')
         cmd = [
-            'cleos', 'set', 'contract', contract_name,
+            'cleos', 'set', 'contract', account_name,
             str(wasm_path.parent),
             wasm_file,
             abi_file,
-            '-p', f'{contract_name}@active'
+            '-p', f'{account_name}@active'
         ]
         retry = 1
         while retry < 4:
@@ -351,16 +403,82 @@ class EOSIOTestSession:
         if ec == 0:
             logging.info('deployed')
 
-    def deploy_contracts(self):
+    def boot_sequence(self):
+        # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
+
+        sys_contracts_mount = '/home/user/contracts/.pytest-eosiocdt'
+
+        for name in [
+            'eosio.bpay',
+            'eosio.names',
+            'eosio.ram',
+            'eosio.ramfee',
+            'eosio.saving',
+            'eosio.stake',
+            'eosio.vpay',
+            'eosio.rex'
+        ]:
+            ec, _ = self.create_account('eosio', name)
+            assert ec == 0 
+
+        self.deploy_contract(
+            'eosio.token',
+            f'{sys_contracts_mount}/eosio.token',
+            staked=False
+        )
+
+        self.deploy_contract(
+            'eosio.msig',
+            f'{sys_contracts_mount}/eosio.msig',
+            staked=False
+        )
+
+        self.deploy_contract(
+            'eosio.wrap',
+            f'{sys_contracts_mount}/eosio.wrap',
+            staked=False
+        )
+
+        self.init_sys_token()
+
+        self.activate_feature_v1('PREACTIVATE_FEATURE')
+
+        self.deploy_contract(
+            'eosio.system',
+            f'{sys_contracts_mount}/eosio.system',
+            account_name='eosio',
+            create_account=False
+        )
+
+        self.activate_feature('ONLY_BILL_FIRST_AUTHORIZER')
+        self.activate_feature('RAM_RESTRICTIONS')
+
+        ec, _ = self.push_action(
+            'eosio', 'setpriv',
+            ['eosio.msig', 1],
+            'eosio@active'
+        )
+        assert ec == 0
+
+        ec, _ = self.push_action(
+            'eosio', 'init',
+            ['0', '4,SYS'],
+            'eosio@active'
+        )
+        assert ec == 0
+
+        # ec, _ = self.buy_ram_bytes('eosio', 1000000000)
+        # assert ec == 0
+
         contracts = [
             node
             for node in Path('contracts').glob('*')
-            if node.is_dir()
-        ]
+            if node.is_dir() and node.name != '.pytest-eosiocdt'
+        ] 
         for contract in contracts:
             self.deploy_contract(
                 contract.name,
-                f'/home/user/contracts/{contract.name}/build'
+                f'/home/user/contracts/{contract.name}'
             )
 
     def create_key_pair(self):
@@ -429,13 +547,56 @@ class EOSIOTestSession:
         assert ec == 0
         logging.info('imported dev key')
 
+    def get_feature_digest(self, feature_name):
+        r = requests.post(
+            f'{self.endpoint}/v1/producer/get_supported_protocol_features',
+            json={}
+        )
+        for item in r.json():
+            if item['specification'][0]['value'] == feature_name:
+                digest = item['feature_digest']
+                break
+        else:
+            raise ValueError(f'{feature_name} feature not found.')
+
+        logging.info(f'{feature_name} digest: {digest}')
+        return digest
+
+    def activate_feature_v1(self, feature_name):
+        digest = self.get_feature_digest(feature_name)
+        logging.info(f'activating {feature_name}...')
+        r = requests.post(
+            f'{self.endpoint}/v1/producer/schedule_protocol_feature_activations',
+            json={
+                'protocol_features_to_activate': [digest]
+            }
+        ).json()
+        
+        logging.info(json.dumps(r, indent=4))
+
+        assert 'result' in r
+        assert r['result'] == 'ok'
+
+        logging.info(f'{digest} active.')
+
+    def activate_feature(self, feature_name):
+        logging.info(f'activating {feature_name}...')
+        digest = self.get_feature_digest(feature_name)
+        ec, _ = self.push_action(
+            'eosio', 'activate',
+            [digest],
+            'eosio@active'
+        )
+        assert ec == 0
+        logging.info(f'{digest} active.')
+
     def __enter__(self):
         self.setup_wallet()
 
         if not self.skip_build:
             self.build_contracts()
         
-        self.deploy_contracts()
+        self.boot_sequence()
 
         return self
 
@@ -484,6 +645,33 @@ class EOSIOTestSession:
         assert 'warning: transaction executed locally' in out
         return ec, out
 
+    def create_account_staked(
+        self,
+        owner: str,
+        name: str,
+        net: str = '1000.0000 SYS',
+        cpu: str = '1000.0000 SYS',
+        ram: int = 8192,
+        key: Optional[str] = None
+    ):
+        if not key:
+            key = self.dev_wallet_pkey
+        ec, out = self.run([
+            'cleos',
+            'system',
+            'newaccount',
+            owner,
+            '--transfer',
+            name, key,
+            '--stake-net', net,
+            '--stake-cpu', cpu,
+            '--buy-ram-kbytes', str(ram)
+        ])
+        logging.info(out)
+        assert ec == 0
+        assert 'warning: transaction executed locally' in out
+        return ec, out
+
 
     def get_table(
         self,
@@ -495,11 +683,14 @@ class EOSIOTestSession:
         done = False
         rows = []
         while not done:
-            ec, out = self.run(
-                ['cleos', 'get', 'table', account, scope, table, '-l', '1000', *args]
-            )
+            ec, out = self.run([
+                'cleos', 'get', 'table',
+                account, scope, table,
+                '-l', '1000', *args
+            ])
             if ec != 0:
                 logging.critical(out)
+
             assert ec == 0
             out = json.loads(out)
             rows.extend(out['rows']) 
@@ -513,11 +704,7 @@ class EOSIOTestSession:
         return json.loads(out)
 
     def get_resources(self, account: str):
-        return self.get_table(
-            'eosio.system',
-            account,
-            'userres'
-        )
+        return self.get_table('eosio', account, 'userres')
 
     def new_account(self, name: Optional[str] = None):
         if name:
@@ -527,8 +714,23 @@ class EOSIOTestSession:
 
         private_key, public_key = self.create_key_pair()
         self.import_key(private_key)
-        self.create_account('eosio', account_name, public_key)
+        self.create_account_staked('eosio', account_name, key=public_key)
         return account_name
+
+    def buy_ram_bytes(
+        self,
+        payer,
+        amount,
+        receiver=None
+    ):
+        if not receiver:
+            receiver = payer
+
+        return self.push_action(
+            'eosio', 'buyrambytes',
+            [payer, receiver, amount],
+            f'{payer}@active'
+        )
 
     """
     Token helpers
@@ -612,6 +814,15 @@ class EOSIOTestSession:
             token_contract=token_contract
         )
 
+
+    def init_sys_token(self):
+        if not self._sys_token_init:
+            self._sys_token_init = True
+            max_supply = f'{10000000000:.4f} SYS'
+            ec, _ = self.create_token('eosio', max_supply)
+            assert ec == 0
+            ec, _ = self.issue_token('eosio', max_supply, __name__)
+            assert ec == 0
 
 _additional_mounts = []
 

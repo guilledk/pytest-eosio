@@ -13,6 +13,7 @@ setup(
 		'pytest',
 		'psutil',
                 'natsort',
+                'requests',
 		'pytest-dockerctl@git+git://github.com/tgoodlet/pytest-dockerctl.git'
 	]
 )

@@ -12,4 +12,19 @@ RUN wget https://github.com/telosnetwork/telos.contracts/archive/refs/tags/v1.7.
 RUN tar xf telos.contracts.tar.gz
 RUN cp -r telos.contracts-1.7.0 /usr/opt/telos.contracts
 
+WORKDIR /usr/opt/telos.contracts
+
+# remove testing target from CMake
+RUN head -n -10 CMakeLists.txt > .tmp_cmake && \
+    mv .tmp_cmake CMakeLists.txt 
+
+RUN cmake .
+RUN make -j$(nproc --all)
+
+# cleanup contracts directory
+WORKDIR /usr/opt/telos.contracts/contracts
+RUN rm -rdf icons CMakeFiles
+
+WORKDIR /root
+
 CMD sleep 9999999999
