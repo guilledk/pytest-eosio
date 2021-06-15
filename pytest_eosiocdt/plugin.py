@@ -41,6 +41,9 @@ def pytest_addoption(parser):
     parser.addoption(
         '--force-build', action='store_true', default=False, help='ignore .binfo files & build all contracts'
     )
+    parser.addoption(
+        '-I', '--include', action='append', default=[], help='add custom include location for contract build'
+    )
 
 
 class EOSIOTestSession:
@@ -63,6 +66,7 @@ class EOSIOTestSession:
 
         self.skip_build = request.config.getoption('--skip-build')
         self.force_build = request.config.getoption('--force-build')
+        self.custom_includes = request.config.getoption('--include')
 
         self.vtestnet = vtestnet
         self.dockerctl = dockerctl
@@ -115,18 +119,22 @@ class EOSIOTestSession:
             f'test -f {work_dir}/CMakeLists.txt && echo True'
         ])
         if is_cmake == 'True\n':  #CMake
-            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
-        
-            cmd = ['cmake', work_dir]
+            cmd = [
+                'cmake',
+                f'-DSYS_CONTRACTS_DIR={self.sys_contracts_path}',
+                f'-DCUSTOM_INCLUDES_DIR={CUSTOM_INCLUDES_DIR}',
+                work_dir
+            ]
             logging.info(f'\t\t{" ".join(cmd)}')
             ec, out = run(
                 cmd,
-                workdir=f'{work_dir}/build',
-                environment={'CXXFLAGS': cxxflags}
+                workdir=f'{work_dir}/build'
             )
             logging.info(out)
             assert ec == 0
 
+            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
+            logging.info(f'\t\tcxxflags: {cxxflags}')
             cmd = ['make', f'-j{psutil.cpu_count()}']
             logging.info(f'\t\t{" ".join(cmd)}')
             ec, out = run(
@@ -137,32 +145,8 @@ class EOSIOTestSession:
             logging.info(out)
             assert ec == 0
 
-        else:  # Custom build
-            assert contract_name
-            cxxflags = [
-                *[f'-I{incl}' for incl in includes],
-                '--abigen', '-Wall'
-            ]
-            ec, sources = run(
-                ['find', '.', '-type', 'f',
-                    '-name', '*.cpp', '-o',
-                    '-name', '*.cc', '-o',
-                    '-name', '*.c'],
-                workdir=work_dir
-            )
-            sources = sources.split('\n') 
-            cmd = [
-                'eosio-cpp', *cxxflags, '-o', f'build/{contract_name}.wasm', *sources
-            ]
-            logging.info(f'\t\t{" ".join(cmd)}')
-            ec, out = run(
-                cmd,
-                workdir=work_dir,
-                environment={'CXXFLAGS': cxxflags}
-            )
-            logging.info(out)
-
-            assert ec == 0
+        else:
+            raise FileNotFoundError("Expected CMakeLists.txt file in the contract directory.")
 
     def build_contracts(self):
         """Build Contracts
@@ -180,18 +164,24 @@ class EOSIOTestSession:
                 ec, out = cdt.exec_run(*args, **kwargs)
                 return ec, out.decode('utf-8')
 
-            ec, out = run(
-                ['sh', '-c', 'echo */'],
-                workdir=f'{self.sys_contracts_path}/contracts'
-            )
-            assert ec == 0
-            self.sys_contracts = [path[:path.find('/')] for path in out.split(' ')]
+            def ls(path: str):
+                ec, out = run(
+                    ['sh', '-c', 'echo */'],
+                    workdir=path
+                )
+                assert ec == 0
+                return out.rstrip().split(' ')
+
+            self.sys_contracts = [
+                path[:path.find('/')]
+                for path in ls(f'{self.sys_contracts_path}/contracts')
+            ]
             include_dirs = [
                 '.',
                 './include',
                 '../include',
                 '../../include',
-                *[
+                *[  # sys contracts
                     f'{self.sys_contracts_path}/contracts/{contract}/include'
                     for contract in self.sys_contracts
                 ]
@@ -201,7 +191,7 @@ class EOSIOTestSession:
             for contract_node in Path('contracts').resolve().glob('*'):
                 if (contract_node.is_dir() and
                         contract_node.name != '.pytest-eosiocdt'):
-                    work_dir = f'/home/user/contracts/{contract_node.name}'
+                    work_dir = f'{CONTRACTS_ROOTDIR}/{contract_node.name}'
 
                     """Smart build system: only recompile contracts whose
                     code as  changed, to do this we hash  every file that
@@ -406,7 +396,7 @@ class EOSIOTestSession:
     def boot_sequence(self):
         # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
 
-        sys_contracts_mount = '/home/user/contracts/.pytest-eosiocdt'
+        sys_contracts_mount = f'{CONTRACTS_ROOTDIR}/.pytest-eosiocdt'
 
         for name in [
             'eosio.bpay',
@@ -478,7 +468,7 @@ class EOSIOTestSession:
         for contract in contracts:
             self.deploy_contract(
                 contract.name,
-                f'/home/user/contracts/{contract.name}'
+                f'{CONTRACTS_ROOTDIR}/{contract.name}'
             )
 
     def create_key_pair(self):
@@ -824,18 +814,8 @@ class EOSIOTestSession:
             ec, _ = self.issue_token('eosio', max_supply, __name__)
             assert ec == 0
 
-_additional_mounts = []
-
-CONTRACTS_ROOTDIR = '/home/user/contracts'
-
-def append_mount(target: str, source: str):
-    _additional_mounts.append(
-        Mount(
-            target,
-            str(Path(source).resolve()),
-            'bind'
-        )
-    )
+CONTRACTS_ROOTDIR = '/root/contracts'
+CUSTOM_INCLUDES_DIR = '/root/includes'
 
 
 @pytest.fixture(scope='session')
@@ -850,7 +830,13 @@ def eosio_testnet(request):
             str(Path('contracts').resolve()),  # source
             'bind'
         )
-    ] + _additional_mounts  
+    ] + [
+        Mount(
+            f'{CUSTOM_INCLUDES_DIR}/{i}',
+            str(Path(inc_dir).resolve()),
+            'bind'
+        ) for i, inc_dir in enumerate(request.config.getoption('--include'))
+    ]
 
     if dockerctl.client.info()['NCPU'] < 2:
         logging.warning('eosio-cpp needs at least 2 logical cores')
