@@ -22,10 +22,14 @@ import requests
 
 from natsort import natsorted
 from docker.types import Mount
-from docker.errors import NotFound
 from pytest_dockerctl import DockerCtl, waitfor
 
-from .sugar import collect_stdout, hash_file, random_eosio_name
+from .sugar import (
+    collect_stdout,
+    hash_file,
+    random_eosio_name,
+    get_container
+)
 
 
 PLUGIN_PREFIX = 'contracts/.pytest-eosiocdt'
@@ -90,7 +94,6 @@ class EOSIOTestSession:
         work_dir,
         includes=[]
     ):
-
         def run(*args, **kwargs):
             ec, out = cdt.exec_run(*args, **kwargs)
             return ec, out.decode('utf-8')
@@ -146,51 +149,58 @@ class EOSIOTestSession:
             assert ec == 0
 
         else:
-            raise FileNotFoundError("Expected CMakeLists.txt file in the contract directory.")
+            raise FileNotFoundError(
+                "Expected CMakeLists.txt file in the contract directory.")
 
-    def build_contracts(self):
+    def build_contracts(self, default_cdt='1.6.3'):
         """Build Contracts
         link: https://developers.eos.io/welcome/latest/
         getting-started/smart-contract-development/hello-world
         """
-        with self.dockerctl.run(
-            'guilledk/pytest-eosiocdt:cdt',
-            mounts=self.docker_mounts
-        ) as containers:
 
-            cdt = containers[0]
+        ec, out = self.run(
+            ['sh', '-c', 'echo */include'],
+            workdir=f'{SYS_CONTRACTS_ROOTDIR}/contracts'
+        )
+        assert ec == 0
 
-            def run(*args, **kwargs):
-                ec, out = cdt.exec_run(*args, **kwargs)
-                return ec, out.decode('utf-8')
+        include_dirs = [
+            '.',
+            './include',
+            '../include',
+            *[
+                f'{SYS_CONTRACTS_ROOTDIR}/contracts/{path}'
+                for path in out.rstrip().split(' ')
+            ]
+        ]
+        self.sys_contracts = [
+            path.replace('/include', '')
+            for path in out.rstrip().split(' ')
+        ]
 
-            def ls(path: str):
-                ec, out = run(
-                    ['sh', '-c', 'echo */'],
-                    workdir=path
+        cdts = {}
+        for contract_node in Path('contracts').resolve().glob('*'):
+            if contract_node.is_dir():
+                cdtv_path = contract_node / '.cdt'
+                cdts[contract_node.name] = default_cdt
+                if cdtv_path.is_file():
+                     with open(cdtv_path, 'r') as version_file:
+                        cdts[contract_node.name] = version_file.read().rstrip()
+
+        with ExitStack() as stack:
+            containers = {}
+            for contract, cdt_v in cdts.items():
+                containers[contract] = stack.enter_context(
+                    get_container(
+                        self.dockerctl,
+                        f'guilledk/pytest-eosiocdt:cdt-{cdt_v}',
+                        mounts=self.docker_mounts
+                    )
                 )
-                assert ec == 0
-                return out.rstrip().split(' ')
-
-            self.sys_contracts = [
-                path[:path.find('/')]
-                for path in ls(f'{self.sys_contracts_path}/contracts')
-            ]
-            include_dirs = [
-                '.',
-                './include',
-                '../include',
-                '../../include',
-                *[  # sys contracts
-                    f'{self.sys_contracts_path}/contracts/{contract}/include'
-                    for contract in self.sys_contracts
-                ]
-            ]
 
             # build user contracts
             for contract_node in Path('contracts').resolve().glob('*'):
-                if (contract_node.is_dir() and
-                        contract_node.name != '.pytest-eosiocdt'):
+                if contract_node.is_dir():
                     work_dir = f'{CONTRACTS_ROOTDIR}/{contract_node.name}'
 
                     """Smart build system: only recompile contracts whose
@@ -267,47 +277,11 @@ class EOSIOTestSession:
 
                     if (prev_hash != current_hash) or self.force_build:
                         self.build_contract(
-                            containers[0],
+                            containers[contract_node.name],
                             contract_node.name,
                             work_dir,
                             includes=include_dirs
                         )
-
-            # save sys contracts wasm & abi from cdt container
-            plugin_path = Path(PLUGIN_PREFIX)
-            plugin_path.mkdir(exist_ok=True)
-
-            for contract in self.sys_contracts:
-                try:
-                    (plugin_path / contract).mkdir()
-                except FileExistsError:
-                    continue
-
-                with open(plugin_path / contract / 'wasm.tar', 'wb') as f_wasm:
-                    bits, stat = cdt.get_archive(
-                        f'{self.sys_contracts_path}/contracts/{contract}/{contract}.wasm'
-                    )
-                    for chunk in bits:
-                        f_wasm.write(chunk)
-
-                with tarfile.open(
-                    plugin_path / contract / 'wasm.tar', mode='r:'
-                ) as tar_wasm:
-                    tar_wasm.extractall(path=plugin_path / contract)
-                Path(plugin_path / contract / 'wasm.tar').unlink()
-
-                with open(plugin_path / contract / 'abi.tar', 'wb') as f_abi:
-                    bits, stat = cdt.get_archive(
-                        f'{self.sys_contracts_path}/contracts/{contract}/{contract}.abi'
-                    )
-                    for chunk in bits:
-                        f_abi.write(chunk)
-
-                with tarfile.open(
-                    plugin_path / contract / 'abi.tar', mode='r:'
-                ) as tar_abi:
-                    tar_abi.extractall(path=plugin_path / contract)
-                Path(plugin_path / contract / 'abi.tar').unlink()
 
     def deploy_contract(
         self,
@@ -396,7 +370,7 @@ class EOSIOTestSession:
     def boot_sequence(self):
         # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
 
-        sys_contracts_mount = f'{CONTRACTS_ROOTDIR}/.pytest-eosiocdt'
+        sys_contracts_mount = f'{SYS_CONTRACTS_ROOTDIR}/contracts'
 
         for name in [
             'eosio.bpay',
@@ -496,10 +470,10 @@ class EOSIOTestSession:
         logging.info('create wallet...')
         ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
         wallet_key = out.split('\n')[-2].strip('\"')
-        logging.info('wallet created')
-
+        logging.info(out)
         assert ec == 0
         assert len(wallet_key) == 53
+        logging.info('wallet created')
 
         # Step 2: Open the Wallet
         logging.info('open wallet...')
@@ -814,6 +788,8 @@ class EOSIOTestSession:
             ec, _ = self.issue_token('eosio', max_supply, __name__)
             assert ec == 0
 
+
+SYS_CONTRACTS_ROOTDIR = '/usr/opt/telos.contracts'
 CONTRACTS_ROOTDIR = '/root/contracts'
 CUSTOM_INCLUDES_DIR = '/root/includes'
 
@@ -829,32 +805,26 @@ def eosio_testnet(request):
             CONTRACTS_ROOTDIR,  # target
             str(Path('contracts').resolve()),  # source
             'bind'
-        )
-    ] + [
-        Mount(
+        ),
+        *[Mount(
             f'{CUSTOM_INCLUDES_DIR}/{i}',
             str(Path(inc_dir).resolve()),
             'bind'
-        ) for i, inc_dir in enumerate(request.config.getoption('--include'))
+        ) for i, inc_dir in enumerate(request.config.getoption('--include'))],
+        Mount(
+            SYS_CONTRACTS_ROOTDIR,
+            'pytest-eosiocdt.syscontracts'
+        )
     ]
 
     if dockerctl.client.info()['NCPU'] < 2:
         logging.warning('eosio-cpp needs at least 2 logical cores')
    
-    with ExitStack() as stack:
-        try:
-            container = dockerctl.client.containers.get('guilledk/pytest-eosiocdt:vtestnet')
-
-        except NotFound:
-            containers = stack.enter_context(
-                dockerctl.run(
-                    'guilledk/pytest-eosiocdt:vtestnet',
-                    mounts=docker_mounts,
-                    publish_all_ports=True
-                )
-            )
-            container = containers[0]
-        
-        yield stack.enter_context(
-            EOSIOTestSession(container, request, dockerctl, docker_mounts)
-        )
+    with get_container(
+        dockerctl,
+        'guilledk/pytest-eosiocdt:vtestnet',
+        mounts=docker_mounts,
+        publish_all_ports=True
+    ) as container:
+        with EOSIOTestSession(container, request, dockerctl, docker_mounts) as session:
+            yield session

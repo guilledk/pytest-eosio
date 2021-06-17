@@ -2,12 +2,16 @@
 
 import string
 import random
+import logging
 
 from typing import Dict, Optional
 from decimal import Decimal
 from pathlib import Path
 from hashlib import sha1
 from datetime import datetime
+from contextlib import contextmanager
+
+from docker.errors import NotFound
 
 
 EOSIO_DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
@@ -108,3 +112,29 @@ def random_eosio_name():
         random.choice('12345abcdefghijklmnopqrstuvwxyz')
         for _ in range(12)
     )
+
+
+# pytest-dockerctl helpers
+
+@contextmanager
+def get_container(dockerctl, image: str, *args, **kwargs):
+    """
+    Get already running container or start one up using an existing dockerctl
+    instance.
+    """
+    found = dockerctl.client.containers.list(
+        filters={
+            'ancestor': image,
+            'status': 'running'
+        }
+    )
+    if len(found) > 0:
+
+        if len(found) > 1:
+            logging.warning('Found more than one posible cdt container')
+
+        yield found[0]
+
+    else:
+        with dockerctl.run(image, *args, **kwargs) as containers:
+            yield containers[0]
