@@ -117,11 +117,12 @@ def random_eosio_name():
 # pytest-dockerctl helpers
 
 @contextmanager
-def get_container(dockerctl, image: str, *args, **kwargs):
+def get_container(dockerctl, repo: str, tag: str, *args, **kwargs):
     """
     Get already running container or start one up using an existing dockerctl
     instance.
     """
+    image = f'{repo}:{tag}'
     found = dockerctl.client.containers.list(
         filters={
             'ancestor': image,
@@ -136,5 +137,23 @@ def get_container(dockerctl, image: str, *args, **kwargs):
         yield found[0]
 
     else:
+        local_images = [
+            img.tags
+            for img in dockerctl.client.images.list(repo)
+        ]
+
+        if image not in local_images:
+            logging.info(f'Image \'{image}\' not in local cache, pulling...')
+
+            updates = {}
+            for update in dockerctl.client.api.pull(
+                repo, tag=tag, stream=True, decode=True
+            ):
+                if 'id' in update:
+                    _id = update['id']
+                    if _id not in updates or (updates[_id] != update['status']):
+                        updates[_id] = update['status']
+                        logging.info(f'{_id}: {update["status"]}')
+
         with dockerctl.run(image, *args, **kwargs) as containers:
             yield containers[0]
