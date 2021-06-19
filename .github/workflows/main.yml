@@ -5,14 +5,7 @@ on: [push]
 jobs:
   build:
 
-    runs-on: ubuntu-latest 
-
-    services:
-      eosio-chain:
-        image: guilledk/pytest-eosiocdt:vtestnet-eosio
-        ports:
-          - 8888:8888
-
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Set up Python
@@ -21,9 +14,8 @@ jobs:
           python-version: '3.x'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install git+git://github.com/guilledk/pytest-eosiocdt.git
+          sudo pip install --upgrade pip
+          sudo pip install -e .
       - name: Run tests
-        run: |
-            pytest
+        run: sudo pytest
 
