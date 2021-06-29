@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import re
 import string
 import random
 import logging
@@ -11,6 +12,7 @@ from hashlib import sha1
 from datetime import datetime
 from contextlib import contextmanager
 
+from natsort import natsorted
 from docker.errors import NotFound
 
 
@@ -87,6 +89,60 @@ def hash_file(path: Path) -> bytes:
     return hasher.digest()
 
 
+def hash_dir(target: Path, includes=[]):
+    logging.info(f'hashing: {target}')
+    hashes = []
+    files_done = set()
+    files_todo = {
+        *[node.resolve() for node in target.glob('**/*.cpp')],
+        *[node.resolve() for node in target.glob('**/*.hpp')],
+        *[node.resolve() for node in target.glob('**/*.c')],
+        *[node.resolve() for node in target.glob('**/*.h')]
+    }
+    while len(files_todo) > 0:
+        new_todo = set()
+        for node in files_todo:
+
+            if node in files_done:
+                continue
+
+            if not node.is_file():
+                files_done.add(node)
+                continue
+
+            hashes.append(hash_file(node))
+            files_done.add(node)
+            with open(node, 'r') as source_file:
+                src_contents = source_file.read()
+
+            # Find all includes in source & add to todo list
+            for match in re.findall('(#include )(.+)\n', src_contents):
+                assert len(match) == 2
+                match = match[1]
+                include = match.split('<')
+                if len(include) == 1:
+                    include = match.split('\"')[1]
+                else:
+                    include = include[1].split('>')[0]
+
+                for include_path in includes:
+                    new_path = Path(f'{include_path}/{include}').resolve()
+                    if new_path in files_done:
+                        continue
+                    new_todo.add(new_path)
+                
+                logging.info(f'found include: {include}')
+
+        files_todo = new_todo
+
+    # Order hashes and compute final hash
+    hasher = sha1()
+    for file_digest in natsorted(hashes, key=lambda x: x.lower()):
+        hasher.update(file_digest)
+
+    _hash = hasher.hexdigest()
+    return _hash
+
 #
 # data generators for testing
 #
@@ -143,8 +199,6 @@ def get_container(dockerctl, repo: str, tag: str, *args, **kwargs):
         ]
 
         if image not in local_images:
-            logging.info(f'Image \'{image}\' not in local cache, pulling...')
-
             updates = {}
             for update in dockerctl.client.api.pull(
                 repo, tag=tag, stream=True, decode=True

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import re
 import time
 import json
 import string
@@ -10,23 +9,23 @@ import tarfile
 import subprocess
 
 from typing import Optional, List, Dict
-from hashlib import sha1
 from pathlib import Path
 from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
 from contextlib import ExitStack
 
+import toml
 import pytest
 import psutil
 import requests
 
-from natsort import natsorted
 from docker.types import Mount
 from pytest_dockerctl import DockerCtl, waitfor
 
 from .sugar import (
     collect_stdout,
     hash_file,
+    hash_dir,
     random_eosio_name,
     get_container
 )
@@ -77,6 +76,7 @@ class EOSIOTestSession:
         self.docker_mounts = docker_mounts
 
         self.user_keys = dict()
+        self.manifest = {}
 
         self.sys_contracts_path = '/usr/opt/telos.contracts'
         self.sys_contracts = []
@@ -87,32 +87,68 @@ class EOSIOTestSession:
         ec, out = self.vtestnet.exec_run(*args, **kwargs)
         return ec, out.decode('utf-8')
 
+    def get_manifest(self):
+        if self.manifest == {}:
+            for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
+                contract_node = sub_manifest_path.parent
+                with open(sub_manifest_path, 'r') as sub_manifest_file:
+                    sub_manifest = toml.loads(sub_manifest_file.read())
+                    for contract, config in sub_manifest.items():                       
+                        sub_manifest[contract]['dir'] = (
+                            str(contract_node / config["dir"])
+                            if 'dir' in config
+                            else f'{contract_node}/{contract}'
+                        )
+
+                        splt_path = sub_manifest[contract]['dir'].split('/')
+                        splt_path[0] = CONTRACTS_ROOTDIR
+                        sub_manifest[contract]['cdir'] = '/'.join(splt_path)
+
+                    self.manifest.update(sub_manifest)
+
+        return self.manifest
+
     def build_contract(
         self,
-        cdt,
-        contract_name,
+        cdt_v,
+        exit_stack,
         work_dir,
         includes=[]
     ):
-        def run(*args, **kwargs):
-            ec, out = cdt.exec_run(*args, **kwargs)
-            return ec, out.decode('utf-8')
+
+        cdt = exit_stack.enter_context(
+            get_container(
+                self.dockerctl,
+                'guilledk/pytest-eosiocdt',
+                f'cdt-{cdt_v}',
+                mounts=self.docker_mounts
+            )
+        )
+
+        def run(cmd, **kwargs):
+            exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
+            exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+            out = ''
+            for line in exec_run:
+                line = line.decode('utf-8')
+                out += line
+                logging.info(line.rstrip())
+
+            info = self.dockerctl.client.api.exec_inspect(exec_id)
+            return info['ExitCode'], out
 
         logging.info('\tperform build...')
         # Clean contract
         logging.info('\t\tclean build')
-        ec, out = run(
-            ['rm', '-rf', f'{work_dir}/build']
-        )
+        ec, _ = run(['rm', '-rf', f'{work_dir}/build'])
         assert ec == 0
 
         # Make build dir
         logging.info('\t\tmake build dir')
-        ec, out = run(
+        ec, _ = run(
             ['mkdir', '-p', 'build'],
             workdir=work_dir
         )
-        logging.info(out)
         assert ec == 0
 
         # Build contract
@@ -129,23 +165,21 @@ class EOSIOTestSession:
                 work_dir
             ]
             logging.info(f'\t\t{" ".join(cmd)}')
-            ec, out = run(
+            ec, _ = run(
                 cmd,
                 workdir=f'{work_dir}/build'
             )
-            logging.info(out)
             assert ec == 0
 
             cxxflags = ' '.join([f'-I{incl}' for incl in includes])
             logging.info(f'\t\tcxxflags: {cxxflags}')
             cmd = ['make', f'-j{psutil.cpu_count()}']
             logging.info(f'\t\t{" ".join(cmd)}')
-            ec, out = run(
+            ec, _ = run(
                 cmd,
                 workdir=f'{work_dir}/build',
                 environment={'CXXFLAGS': cxxflags}
             )
-            logging.info(out)
             assert ec == 0
 
         else:
@@ -178,111 +212,42 @@ class EOSIOTestSession:
             for path in out.rstrip().split(' ')
         ]
 
-        cdts = {}
-        for contract_node in Path('contracts').resolve().glob('*'):
-            if contract_node.is_dir():
-                cdtv_path = contract_node / '.cdt'
-                cdts[contract_node.name] = default_cdt
-                if cdtv_path.is_file():
-                     with open(cdtv_path, 'r') as version_file:
-                        cdts[contract_node.name] = version_file.read().rstrip()
+        manifest = self.get_manifest() 
 
         with ExitStack() as stack:
-            containers = {}
-            for contract, cdt_v in cdts.items():
-                containers[contract] = stack.enter_context(
-                    get_container(
-                        self.dockerctl,
-                        'guilledk/pytest-eosiocdt',
-                        f'cdt-{cdt_v}',
-                        mounts=self.docker_mounts
+
+            for contract_name, config in manifest.items():
+                """Smart build system: only recompile contracts whose
+                code as  changed, to do this we hash  every file that
+                we can find that is used in compilation, we order the
+                hash list and then use each hash to compute a  global
+                hash.
+                """
+                contract_node = Path(config['dir'])
+                binfo_path = contract_node / '.binfo'
+                try:
+                    with open(binfo_path, 'r') as build_info:
+                        prev_hash = build_info.read()
+
+                except FileNotFoundError:
+                    prev_hash = None
+
+                curr_hash = hash_dir(contract_node, includes=include_dirs)
+                
+                logging.info(f'prev hash: {prev_hash}')
+                logging.info(f'curr hash: {curr_hash}')
+
+                # Reopen to truncate contents
+                with open(binfo_path, 'w') as build_info: 
+                    build_info.write(curr_hash)
+
+                if (prev_hash != curr_hash) or self.force_build:
+                    self.build_contract(
+                        manifest[contract_name]['cdt'],
+                        stack,
+                        config['cdir'],
+                        includes=include_dirs
                     )
-                )
-
-            # build user contracts
-            for contract_node in Path('contracts').resolve().glob('*'):
-                if contract_node.is_dir():
-                    work_dir = f'{CONTRACTS_ROOTDIR}/{contract_node.name}'
-
-                    """Smart build system: only recompile contracts whose
-                    code as  changed, to do this we hash  every file that
-                    we can find that is used in compilation, we order the
-                    hash list and then use each hash to compute a  global
-                    hash.
-                    """
-
-                    binfo_path = contract_node / '.binfo'
-                    try:
-                        with open(binfo_path, 'r') as build_info:
-                            prev_hash = build_info.read()
-
-                    except FileNotFoundError:
-                        prev_hash = ''
-
-                    logging.info(f'prev hash: {prev_hash}')
-
-                    # Reopen to truncate contents
-                    with open(binfo_path, 'w') as build_info:
-                        hashes = []
-                        files_done = set()
-                        files_todo = {
-                            *[node.resolve() for node in contract_node.glob('**/*.cpp')],
-                            *[node.resolve() for node in contract_node.glob('**/*.hpp')],
-                            *[node.resolve() for node in contract_node.glob('**/*.c')],
-                            *[node.resolve() for node in contract_node.glob('**/*.h')]
-                        }
-                        while len(files_todo) > 0:
-                            new_todo = set()
-                            for node in files_todo:
-
-                                if node in files_done:
-                                    continue
-
-                                if not node.is_file():
-                                    files_done.add(node)
-                                    continue
-
-                                hashes.append(hash_file(node))
-                                files_done.add(node)
-                                with open(node, 'r') as source_file:
-                                    src_contents = source_file.read()
-
-                                # Find all includes in source & add to todo list
-                                for match in re.findall('(#include )(.+)\n', src_contents):
-                                    assert len(match) == 2
-                                    match = match[1]
-                                    include = match.split('<')
-                                    if len(include) == 1:
-                                        include = match.split('\"')[1]
-                                    else:
-                                        include = include[1].split('>')[0]
-
-                                    for include_path in include_dirs:
-                                        new_path = Path(f'{include_path}/{include}').resolve()
-                                        if new_path in files_done:
-                                            continue
-                                        new_todo.add(new_path)
-                                    
-                                    logging.info(f'found include: {include}')
-
-                            files_todo = new_todo
-
-                        # Order hashes and compute final hash
-                        hasher = sha1()
-                        for file_digest in natsorted(hashes, key=lambda x: x.lower()):
-                            hasher.update(file_digest)
-
-                        current_hash = hasher.hexdigest()
-                        logging.info(f'proyect hash: {current_hash}')
-                        build_info.write(current_hash)
-
-                    if (prev_hash != current_hash) or self.force_build:
-                        self.build_contract(
-                            containers[contract_node.name],
-                            contract_node.name,
-                            work_dir,
-                            includes=include_dirs
-                        )
 
     def deploy_contract(
         self,
@@ -368,6 +333,10 @@ class EOSIOTestSession:
         if ec == 0:
             logging.info('deployed')
 
+        else:
+            raise AssertionError(f'Couldn\'t deploy {account_name} contract.')
+
+
     def boot_sequence(self):
         # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
 
@@ -432,19 +401,14 @@ class EOSIOTestSession:
         )
         assert ec == 0
 
-        # ec, _ = self.buy_ram_bytes('eosio', 1000000000)
-        # assert ec == 0
+        manifest = self.get_manifest()
 
-        contracts = [
-            node
-            for node in Path('contracts').glob('*')
-            if node.is_dir() and node.name != '.pytest-eosiocdt'
-        ] 
-        for contract in contracts:
+        for contract_name, config in manifest.items():
+            if 'name' in config:
+                contract_name = config['name']
+
             self.deploy_contract(
-                contract.name,
-                f'{CONTRACTS_ROOTDIR}/{contract.name}'
-            )
+                contract_name, config['cdir'])
 
     def create_key_pair(self):
         ec, out = self.run(['cleos', 'create', 'key', '--to-console'])

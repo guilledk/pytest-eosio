@@ -1,0 +1,7 @@
+[helloworld]
+cdt = '1.7.0'
+
+[telosdecide]
+cdt = '1.6.3'
+name = 'telos.decide'
+dir = 'telos.decide'
