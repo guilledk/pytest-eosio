@@ -661,6 +661,135 @@ class EOSIOTestSession:
             f'{payer}@active'
         )
 
+    def create_multi_sig_account(
+        self,
+        owners,
+        target_permission = 'active',
+        parent_permission: Optional[str] = None 
+    ):
+        msig_account = self.new_account()
+
+        cmd = [
+            'cleos', 'set', 'account', 'permission',
+            msig_account, target_permission,
+            json.dumps(
+                {
+                    'threshold': len(owners),
+                    'keys': [],
+                    'accounts': [
+                        {
+                            'permission': {
+                                'actor': perm[0],
+                                'permission': perm[1]
+                            },
+                            'weight': 1
+                        } for perm in (
+                            owner.split('@')
+                            for owner in owners
+                        )
+                    ],
+                    'waits': []
+                }
+            ),
+            '-p', f'{msig_account}@owner'
+        ]
+        if parent_permission:
+            cmd.insert(-2, parent_permission)
+
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        assert ec == 0
+
+        return msig_account
+
+
+    def multi_sig_propose(
+        self,
+        proposer,
+        req_permissions: List[str],  # [ 'name1@active', 'name2@active' ]
+        tx_petmissions: List[str],
+        contract,
+        action_name,
+        data
+    ) -> str:
+
+        proposal_name = random_eosio_name()
+        cmd = [
+            'cleos',
+            'multisig',
+            'propose',
+            proposal_name,
+            json.dumps([
+                {'actor': perm[0], 'permission': perm[1]}
+                for perm in [p.split('@') for p in req_permissions]
+            ]),
+            json.dumps([
+                {'actor': perm[0], 'permission': perm[1]}
+                for perm in [p.split('@') for p in tx_petmissions]
+            ]),
+            contract,
+            action_name,
+            json.dumps(data),
+            '-p', proposer
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        assert ec == 0
+
+        return proposal_name
+
+    def multi_sig_approve(
+        self,
+        proposer,
+        proposal_name,
+        permissions,
+        approver
+    ):
+        return self.run([
+            'cleos',
+            'multisig',
+            'approve',
+            proposer,
+            proposal_name,
+            *[
+                json.dumps({'actor': perm[0], 'permission': perm[1]})
+                for perm in [p.split('@') for p in permissions]
+            ],
+            '-p', approver
+        ])
+
+    def multi_sig_exec(
+        self,
+        proposer,
+        proposal_name,
+        permission
+    ):
+        return self.run([
+            'cleos',
+            'multisig',
+            'exec',
+            proposer,
+            proposal_name,
+            '-p', permission
+        ])
+
+    def multi_sig_review(
+        self,
+        proposer,
+        proposal_name,
+        permission
+    ):
+        return self.run([
+            'cleos',
+            'multisig',
+            'review',
+            proposer,
+            proposal_name
+        ])
+
+
     """
     Token helpers
     """
