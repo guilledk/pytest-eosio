@@ -7,17 +7,7 @@ To run tests:
     pip install -r requirements.txt
     pip install .
 
-# Native mode:
-
-###### (IMPORTANT: this plugin manages a local single block producer blockchain, this means it manages keosd & nodeos on its own, and requires them to not be running when executing tests)
-
-3 - run tests:
-
-    pytest --native
-
-# Docker mode:
-
-###### (IMPORTANT: Docker must be installed and running, ALSO: the first test session the plugin will download the docker image (452mb), so it might take a while)
+###### (IMPORTANT: Docker must be installed and running)
 
 3 - run tests:
 
