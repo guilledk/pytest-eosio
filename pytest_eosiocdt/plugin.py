@@ -1,46 +1,43 @@
 #!/usr/bin/env python3
 
-import re
 import time
 import json
 import string
 import random
 import logging
+import tarfile
 import subprocess
 
-from queue import Queue, Empty
 from typing import Optional, List, Dict
-from hashlib import sha1
 from pathlib import Path
-from threading  import Thread
+from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
+from contextlib import ExitStack
 
+import toml
 import pytest
 import psutil
+import requests
 
-from natsort import natsorted
 from docker.types import Mount
-from pytest_dockerctl import DockerCtl
+from pytest_dockerctl import DockerCtl, waitfor
 
-from .sugar import collect_stdout, hash_file, random_eosio_name
+from .sugar import (
+    collect_stdout,
+    hash_file,
+    hash_dir,
+    random_eosio_name,
+    get_container
+)
 
 
-_additional_mounts = []
-
-
-CONTRACTS_ROOTDIR = '/home/user/contracts'
-
-def append_mount(target: str, source: str):
-    _additional_mounts.append(
-        Mount(
-            target,
-            str(Path(source).resolve()),
-            'bind'
-        )
-    )
+PLUGIN_PREFIX = 'contracts/.pytest-eosiocdt'
 
 
 def pytest_addoption(parser):
+    parser.addoption(
+        '--endpoint', action='store', default='', help='blockchain api endpoint to target'
+    )
     parser.addoption(
         '--skip-build', action='store_true', default=False, help='dont\'t build contract'
     )
@@ -48,130 +45,389 @@ def pytest_addoption(parser):
         '--force-build', action='store_true', default=False, help='ignore .binfo files & build all contracts'
     )
     parser.addoption(
-        '--native', action='store_true', default=False, help='run blockchain outside vm'
-    )
-    parser.addoption(
-        '--cdt-version', action='store', default='1.6.3', help='set specific eosio cdt version'
-    )
-    parser.addoption(
-        '--sys-contracts', action='store', default='none'
+        '-I', '--include', action='append', default=[], help='add custom include location for contract build'
     )
 
 
-class NodeOSException(Exception):
-    ...
-
-
-class CLEOSWrapper:
+class EOSIOTestSession:
 
     def __init__(
         self,
-        cdt_version: str,
-        container: Optional = None,
-        sys_contracts: Optional[str] = None
+        vtestnet,  # vtestnet container
+        request,  # pytest session config
+        dockerctl: DockerCtl,
+        docker_mounts: List[Mount]
     ):
-        self.container = container
-        self.sys_contracts = sys_contracts
-        self.cdt_version = cdt_version
+        endpoint = request.config.getoption('--endpoint')
+        if endpoint:
+            self.endpoint = endpoint
+        else:
+            ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
+            container_port = ports[0]['HostPort']
+
+            self.endpoint = f'http://localhost:{container_port}'
+
+        self.skip_build = request.config.getoption('--skip-build')
+        self.force_build = request.config.getoption('--force-build')
+        self.custom_includes = request.config.getoption('--include')
+
+        self.vtestnet = vtestnet
+        self.dockerctl = dockerctl
+        self.docker_mounts = docker_mounts
+
+        self.user_keys = dict()
+        self.manifest = {}
+
+        self.sys_contracts_path = '/usr/opt/telos.contracts'
+        self.sys_contracts = []
+
+        self._sys_token_init = False
 
     def run(self, *args, **kwargs):
-        if self.container:
-            ec, out = self.container.exec_run(*args, **kwargs)
-            return ec, out.decode('utf-8')
-        else:
-            if ('popen' in kwargs) and kwargs['popen']:
-                del kwargs['popen']
-                return subprocess.Popen(
-                    *args,
-                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
-                    **kwargs
-                )
-            else:
-                pinfo = subprocess.run(
-                    *args, 
-                    stdout=PIPE, stderr=STDOUT, encoding='utf-8',
-                    **kwargs
-                )
-                return pinfo.returncode, pinfo.stdout
+        ec, out = self.vtestnet.exec_run(*args, **kwargs)
+        return ec, out.decode('utf-8')
 
-    def start_services(self):
-        logging.info('starting eosio services...')
-        logging.info('keosd start...')
-        self.proc_keosd = subprocess.Popen(
-            ['keosd'],
-            stdout=PIPE, stderr=STDOUT, encoding='utf-8'
-        )
-        logging.info('nodeos start...')
-        self.proc_nodeos = subprocess.Popen(
-            [
-                'nodeos', '-e', '-p', 'eosio',
-                '--plugin', 'eosio::producer_plugin',
-                '--plugin', 'eosio::producer_api_plugin',
-                '--plugin', 'eosio::chain_api_plugin',
-                '--plugin', 'eosio::http_plugin',
-                '--plugin', 'eosio::history_plugin',
-                '--plugin', 'eosio::history_api_plugin',
-                '--filter-on=\"*\"',
-                '--access-control-allow-origin=\"*\"',
-                '--contracts-console',
-                '--http-validate-host=false',
-                '--verbose-http-errors'
-            ], stdout=PIPE, stderr=STDOUT, encoding='utf-8'
+    def get_manifest(self):
+        if self.manifest == {}:
+            for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
+                contract_node = sub_manifest_path.parent
+                with open(sub_manifest_path, 'r') as sub_manifest_file:
+                    sub_manifest = toml.loads(sub_manifest_file.read())
+                    for contract, config in sub_manifest.items():                       
+                        sub_manifest[contract]['dir'] = (
+                            str(contract_node / config["dir"])
+                            if 'dir' in config
+                            else f'{contract_node}/{contract}'
+                        )
+
+                        splt_path = sub_manifest[contract]['dir'].split('/')
+                        splt_path[0] = CONTRACTS_ROOTDIR
+                        sub_manifest[contract]['cdir'] = '/'.join(splt_path)
+
+                    self.manifest.update(sub_manifest)
+
+        return self.manifest
+
+    def build_contract(
+        self,
+        cdt_v,
+        exit_stack,
+        work_dir,
+        includes=[]
+    ):
+
+        cdt = exit_stack.enter_context(
+            get_container(
+                self.dockerctl,
+                'guilledk/pytest-eosiocdt',
+                f'cdt-{cdt_v}',
+                mounts=self.docker_mounts
+            )
         )
 
-        def enqueue_output(out, queue):
-            for line in out:
-                queue.put(line)
-            out.close()
-
-        stdout_queue = Queue()
-        reader_thread = Thread(
-            target=enqueue_output,
-            args=(self.proc_nodeos.stdout, stdout_queue)
-        )
-        reader_thread.daemon = True
-        reader_thread.start()
-
-        initalized = False
-        init_timeout = 15  # seg
-        start_time = time.time()
-        while not initalized:
-            try:
-                line = stdout_queue.get(timeout=0.4)
+        def run(cmd, **kwargs):
+            exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
+            exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+            out = ''
+            for line in exec_run:
+                line = line.decode('utf-8')
+                out += line
                 logging.info(line.rstrip())
-            except Empty:
-                if time.time() - start_time > init_timeout:
-                    self.stop_services()
-                    raise NodeOSException('init timeout')
-                else:
-                    continue
+
+            info = self.dockerctl.client.api.exec_inspect(exec_id)
+            return info['ExitCode'], out
+
+        logging.info('\tperform build...')
+        # Clean contract
+        logging.info('\t\tclean build')
+        ec, _ = run(['rm', '-rf', f'{work_dir}/build'])
+        assert ec == 0
+
+        # Make build dir
+        logging.info('\t\tmake build dir')
+        ec, _ = run(
+            ['mkdir', '-p', 'build'],
+            workdir=work_dir
+        )
+        assert ec == 0
+
+        # Build contract
+        _, is_cmake = run([
+            'sh',
+            '-c',
+            f'test -f {work_dir}/CMakeLists.txt && echo True'
+        ])
+        if is_cmake == 'True\n':  #CMake
+            cmd = [
+                'cmake',
+                f'-DSYS_CONTRACTS_DIR={self.sys_contracts_path}',
+                f'-DCUSTOM_INCLUDES_DIR={CUSTOM_INCLUDES_DIR}',
+                work_dir
+            ]
+            logging.info(f'\t\t{" ".join(cmd)}')
+            ec, _ = run(
+                cmd,
+                workdir=f'{work_dir}/build'
+            )
+            assert ec == 0
+
+            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
+            logging.info(f'\t\tcxxflags: {cxxflags}')
+            cmd = ['make', f'-j{psutil.cpu_count()}']
+            logging.info(f'\t\t{" ".join(cmd)}')
+            ec, _ = run(
+                cmd,
+                workdir=f'{work_dir}/build',
+                environment={'CXXFLAGS': cxxflags}
+            )
+            assert ec == 0
+
+        else:
+            raise FileNotFoundError(
+                "Expected CMakeLists.txt file in the contract directory.")
+
+    def build_contracts(self, default_cdt='1.6.3'):
+        """Build Contracts
+        link: https://developers.eos.io/welcome/latest/
+        getting-started/smart-contract-development/hello-world
+        """
+
+        ec, out = self.run(
+            ['sh', '-c', 'echo */include'],
+            workdir=f'{SYS_CONTRACTS_ROOTDIR}/contracts'
+        )
+        assert ec == 0
+
+        include_dirs = [
+            '.',
+            './include',
+            '../include',
+            *[
+                f'{SYS_CONTRACTS_ROOTDIR}/contracts/{path}'
+                for path in out.rstrip().split(' ')
+            ]
+        ]
+        self.sys_contracts = [
+            path.replace('/include', '')
+            for path in out.rstrip().split(' ')
+        ]
+
+        manifest = self.get_manifest() 
+
+        with ExitStack() as stack:
+
+            for contract_name, config in manifest.items():
+                """Smart build system: only recompile contracts whose
+                code as  changed, to do this we hash  every file that
+                we can find that is used in compilation, we order the
+                hash list and then use each hash to compute a  global
+                hash.
+                """
+                contract_node = Path(config['dir'])
+                binfo_path = contract_node / '.binfo'
+                try:
+                    with open(binfo_path, 'r') as build_info:
+                        prev_hash = build_info.read()
+
+                except FileNotFoundError:
+                    prev_hash = None
+
+                curr_hash = hash_dir(contract_node, includes=include_dirs)
+                
+                logging.info(f'prev hash: {prev_hash}')
+                logging.info(f'curr hash: {curr_hash}')
+
+                # Reopen to truncate contents
+                with open(binfo_path, 'w') as build_info: 
+                    build_info.write(curr_hash)
+
+                if (prev_hash != curr_hash) or self.force_build:
+                    self.build_contract(
+                        manifest[contract_name]['cdt'],
+                        stack,
+                        config['cdir'],
+                        includes=include_dirs
+                    )
+
+    def deploy_contract(
+        self,
+        contract_name,
+        build_dir,
+        privileged=False,
+        account_name=None,
+        create_account=True,
+        staked=True
+    ):
+        logging.info(f'contract {contract_name}:')
+
+        account_name = contract_name if not account_name else account_name
+
+        if create_account:
+            logging.info('\tcreate account...')
+            if staked:
+                self.create_account_staked('eosio', account_name)
             else:
-                initalized = 'Produced' in line
+                self.create_account('eosio', account_name)
+            logging.info('\taccount created')
 
-        logging.info('eosio services started.')
+        if privileged:
+            self.push_action(
+                'eosio', 'setpriv',
+                [account_name, 1],
+                'eosio@active'
+            )
 
-    def dump_services_output(self):
-        outs, errs = self.proc_keosd.communicate(timeout=1)
-        logging.error(f'keosd exit code: {self.proc_keosd.poll()}')
-        logging.error('keosd outs:')
-        logging.error(outs)
-        logging.error('keosd errs:')
-        logging.error(errs)
+        logging.info('\tgive .code permissions...')
+        cmd = [
+            'cleos', 'set', 'account', 'permission', account_name,
+            'active', '--add-code'
+        ]
+        ec, out = self.run(cmd)
+        logging.info(f'\tcmd: {cmd}')
+        logging.info(f'\t{out}')
+        assert ec == 0
+        logging.info('\tpermissions granted.')
 
-        outs, errs = self.proc_nodeos.communicate(timeout=1)
-        logging.error(f'nodeos exit code: {self.proc_nodeos.poll()}')
-        logging.error('nodeos outs:')
-        logging.error(outs)
-        logging.error('nodeos errs:')
-        logging.error(errs)
+        ec, out = self.run(
+            ['find', build_dir, '-type', 'f', '-name', '*.wasm']
+        )
+        logging.info(f'wasm candidates:\n{out}')
+        wasms = out.rstrip().split('\n')
 
-    def stop_services(self):
-        logging.info('stopping eosio services...')
-        self.proc_nodeos.kill()
-        self.proc_keosd.kill()
-        logging.info('eosio services stopped.')
+        # Fuzzy match all .wasm files, select one most similar to {contract.name} 
+        matches = sorted(
+            [Path(wasm) for wasm in wasms],
+            key=lambda match: SequenceMatcher(
+                None, contract_name, match.stem).ratio(),
+            reverse=True
+        )
+        if len(matches) == 0: 
+            raise FileNotFoundError(
+                f'Couldn\'t find {contract_name}.wasm')
 
-    def wallet_setup(self):
+        wasm_path = matches[0]
+        wasm_file = str(wasm_path).split('/')[-1]
+        abi_file = wasm_file.replace('.wasm', '.abi')
+
+        logging.info('deploy...')
+        logging.info(f'wasm path: {wasm_path}')
+        logging.info(f'wasm: {wasm_file}')
+        logging.info(f'abi: {abi_file}')
+        cmd = [
+            'cleos', 'set', 'contract', account_name,
+            str(wasm_path.parent),
+            wasm_file,
+            abi_file,
+            '-p', f'{account_name}@active'
+        ]
+        retry = 1
+        while retry < 4:
+            logging.info(f'deplot attempt {retry}')
+
+            ec, out = self.run(cmd)
+            logging.info(out)
+                
+            if ec == 0:
+                break
+
+            retry += 1
+
+        if ec == 0:
+            logging.info('deployed')
+
+        else:
+            raise AssertionError(f'Couldn\'t deploy {account_name} contract.')
+
+
+    def boot_sequence(self):
+        # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
+
+        sys_contracts_mount = f'{SYS_CONTRACTS_ROOTDIR}/contracts'
+
+        for name in [
+            'eosio.bpay',
+            'eosio.names',
+            'eosio.ram',
+            'eosio.ramfee',
+            'eosio.saving',
+            'eosio.stake',
+            'eosio.vpay',
+            'eosio.rex'
+        ]:
+            ec, _ = self.create_account('eosio', name)
+            assert ec == 0 
+
+        self.deploy_contract(
+            'eosio.token',
+            f'{sys_contracts_mount}/eosio.token',
+            staked=False
+        )
+
+        self.deploy_contract(
+            'eosio.msig',
+            f'{sys_contracts_mount}/eosio.msig',
+            staked=False
+        )
+
+        self.deploy_contract(
+            'eosio.wrap',
+            f'{sys_contracts_mount}/eosio.wrap',
+            staked=False
+        )
+
+        self.init_sys_token()
+
+        self.activate_feature_v1('PREACTIVATE_FEATURE')
+
+        self.deploy_contract(
+            'eosio.system',
+            f'{sys_contracts_mount}/eosio.system',
+            account_name='eosio',
+            create_account=False
+        )
+
+        self.activate_feature('ONLY_BILL_FIRST_AUTHORIZER')
+        self.activate_feature('RAM_RESTRICTIONS')
+
+        ec, _ = self.push_action(
+            'eosio', 'setpriv',
+            ['eosio.msig', 1],
+            'eosio@active'
+        )
+        assert ec == 0
+
+        ec, _ = self.push_action(
+            'eosio', 'init',
+            ['0', '4,SYS'],
+            'eosio@active'
+        )
+        assert ec == 0
+
+        manifest = self.get_manifest()
+
+        for contract_name, config in manifest.items():
+            if 'name' in config:
+                contract_name = config['name']
+
+            self.deploy_contract(
+                contract_name, config['cdir'])
+
+    def create_key_pair(self):
+        ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
+        assert ec == 0
+        assert ('Private key' in out) and ('Public key' in out)
+        lines = out.split('\n')
+        logging.info(out)
+        return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
+
+    def import_key(self, private_key):
+        ec, out = self.run(
+            ['cleos', 'wallet', 'import', '--private-key', private_key]
+        )
+        logging.info(out)
+        return ec
+
+    def setup_wallet(self):
         """Create Development Wallet
         link: https://docs.telos.net/developers/platform/
         development-environment/create-development-wallet
@@ -181,10 +437,10 @@ class CLEOSWrapper:
         logging.info('create wallet...')
         ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
         wallet_key = out.split('\n')[-2].strip('\"')
-        logging.info('walet created')
-
+        logging.info(out)
         assert ec == 0
         assert len(wallet_key) == 53
+        logging.info('wallet created')
 
         # Step 2: Open the Wallet
         logging.info('open wallet...')
@@ -218,255 +474,65 @@ class CLEOSWrapper:
 
         # Step 5: Import the Development Key
         logging.info('import development key...')
-        ec, out = self.run(
-            ['cleos', 'wallet', 'import', '--private-key', '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3']
-        )
+        ec = self.import_key('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
         assert ec == 0
         logging.info('imported dev key')
 
-    def deploy_contracts(
-        self,
-        skip_build: bool = False,
-        force_build: bool = False
-    ):
-        """Deploy Contracts
-        link: https://developers.eos.io/welcome/latest/
-        getting-started/smart-contract-development/hello-world
-        """
+    def get_feature_digest(self, feature_name):
+        r = requests.post(
+            f'{self.endpoint}/v1/producer/get_supported_protocol_features',
+            json={}
+        )
+        for item in r.json():
+            if item['specification'][0]['value'] == feature_name:
+                digest = item['feature_digest']
+                break
+        else:
+            raise ValueError(f'{feature_name} feature not found.')
 
-        logging.info('start contract deployment...')
-        for contract_node in Path('contracts').resolve().glob('*'):
-            if contract_node.is_dir():
-                container_dir = f'/home/user/contracts/{contract_node.name}'
-                logging.info(f'contract {contract_node.name}:')
+        logging.info(f'{feature_name} digest: {digest}')
+        return digest
 
-                # Create account for contract
-                logging.info('\tcreate account...')
-                self.create_account('eosio', contract_node.name)
-                logging.info('\taccount created')
+    def activate_feature_v1(self, feature_name):
+        digest = self.get_feature_digest(feature_name)
+        logging.info(f'activating {feature_name}...')
+        r = requests.post(
+            f'{self.endpoint}/v1/producer/schedule_protocol_feature_activations',
+            json={
+                'protocol_features_to_activate': [digest]
+            }
+        ).json()
+        
+        logging.info(json.dumps(r, indent=4))
 
-                logging.info('\tgive .code permissions...')
-                cmd = [
-                    'cleos', 'set', 'account', 'permission', contract_node.name,
-                    'active', '--add-code'
-                ]
-                ec, out = self.run(cmd)
-                assert ec == 0
-                logging.info('\tpermissions granted.')
+        assert 'result' in r
+        assert r['result'] == 'ok'
 
-                workdir_param = {}
-                if self.container:
-                    workdir_param['workdir'] = container_dir
-                    build_dir = f'{container_dir}/build'
-                else:
-                    contract_node_dir = contract_node.resolve()
-                    workdir_param['cwd'] = str(contract_node_dir)
-                    build_dir = f'{contract_node_dir}/build'
+        logging.info(f'{digest} active.')
 
-                logging.info(f'\twork param: {workdir_param}')
-                logging.info(f'\tbuild dir: \'{build_dir}\'')
+    def activate_feature(self, feature_name):
+        logging.info(f'activating {feature_name}...')
+        digest = self.get_feature_digest(feature_name)
+        ec, _ = self.push_action(
+            'eosio', 'activate',
+            [digest],
+            'eosio@active'
+        )
+        assert ec == 0
+        logging.info(f'{digest} active.')
 
-                ec, out = self.run(['ls', self.sys_contracts])
-                assert ec == 0
+    def __enter__(self):
+        self.setup_wallet()
 
-                sys_contracts = out.rstrip().split('\n')
-                sys_includes = [
-                    f'{self.sys_contracts}/{contract}/include'
-                    for contract in sys_contracts
-                ] if self.sys_contracts is not None else []
+        if not self.skip_build:
+            self.build_contracts()
+        
+        self.boot_sequence()
 
-                include_dirs = [
-                    '.',
-                    './include',
-                    '../include',
-                    '../../include',
-                    *sys_includes#,
-                    # '/usr/opt/eosio.cdt/{self.cdt_version}/include/',
-                ]
+        return self
 
-                if not skip_build:
-
-                    """Smart build system: only recompile contracts whose
-                    code as  changed, to do this we hash  every file that
-                    we can find that is used in compilation, we order the
-                    hash list and then use each hash to compute a  global
-                    hash.
-                    """
-
-                    binfo_path = contract_node / '.binfo'
-                    try:
-                        with open(binfo_path, 'r') as build_info:
-                            prev_hash = build_info.read()
-
-                    except FileNotFoundError:
-                        prev_hash = ''
-
-                    logging.info(f'prev hash: {prev_hash}')
-
-                    # Reopen to truncate contents
-                    with open(binfo_path, 'w') as build_info:
-                        hashes = []
-                        files_done = set()
-                        files_todo = {
-                            *[node.resolve() for node in contract_node.glob('**/*.cpp')],
-                            *[node.resolve() for node in contract_node.glob('**/*.hpp')],
-                            *[node.resolve() for node in contract_node.glob('**/*.c')],
-                            *[node.resolve() for node in contract_node.glob('**/*.h')]
-                        }
-                        while len(files_todo) > 0:
-                            new_todo = set()
-                            for node in files_todo:
-
-                                if node in files_done:
-                                    continue
-
-                                if not node.is_file():
-                                    files_done.add(node)
-                                    continue
-
-                                hashes.append(hash_file(node))
-                                files_done.add(node)
-                                with open(node, 'r') as source_file:
-                                    src_contents = source_file.read()
-
-                                # Find all includes in source & add to todo list
-                                for match in re.findall('(#include )(.+)\n', src_contents):
-                                    assert len(match) == 2
-                                    match = match[1]
-                                    include = match.split('<')
-                                    if len(include) == 1:
-                                        include = match.split('\"')[1]
-                                    else:
-                                        include = include[1].split('>')[0]
-
-                                    for include_path in include_dirs:
-                                        new_path = Path(f'{include_path}/{include}').resolve()
-                                        if new_path in files_done:
-                                            continue
-                                        new_todo.add(new_path)
-                                    
-                                    logging.info(f'found include: {include}')
-
-                            files_todo = new_todo
-
-                        # Order hashes and compute final hash
-                        hasher = sha1()
-                        for file_digest in natsorted(hashes, key=lambda x: x.lower()):
-                            hasher.update(file_digest)
-
-                        current_hash = hasher.hexdigest()
-                        logging.info(f'proyect hash: {current_hash}')
-                        build_info.write(current_hash)
-
-                    if (prev_hash != current_hash) or force_build:
-                        logging.info('\tperform build...')
-                        # Clean contract
-                        logging.info('\t\tclean build')
-                        ec, out = self.run(
-                        ['rm', '-rf', build_dir]
-                        )
-                        assert ec == 0
-
-                        # Make build dir
-                        logging.info('\t\tmake build dir')
-                        ec, out = self.run(
-                            ['mkdir', '-p', 'build'],
-                            **workdir_param
-                        )
-                        assert ec == 0
-
-                        # Build contract
-                        if (contract_node / Path('CMakeLists.txt')).is_file():  # CMake
-                            cmake_args = {}
-                            cxxflags = ' '.join([f'-I{incl}' for incl in include_dirs])
-                            if self.container:
-                                cmake_args['workdir'] = build_dir
-                                cmake_args['environment'] = {'CXXFLAGS': cxxflags}
-
-                            else:
-                                cmake_args['cwd'] = build_dir
-                                cmake_args['shell'] = True
-                                cmake_args['env'] = {'CXXFLAGS': cxxflags}
-                            
-                            cmd = ['cmake', build_dir.replace('/build', '')]
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(cmd, **cmake_args)
-                            logging.info(out)
-                            assert ec == 0
-
-                            cmd = ['make', f'-j{psutil.cpu_count()}']
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            ec, out = self.run(cmd, **cmake_args)
-                            logging.info(out)
-                            assert ec == 0
-
-                        else:  # Custom build
-                            cflags = [
-                                *[f'-I{incl}' for incl in include_dirs],
-                                '--abigen', '-Wall'
-                            ]
-                            sources = [n.name for n in contract_node.resolve().glob('*.cpp')]
-                            cmd = ['eosio-cpp', *cflags, '-o', f'build/{contract_node.name}.wasm', *sources]
-                            logging.info(f'\t\t{" ".join(cmd)}')
-                            if self.container:
-                                ec, out = self.run(cmd, **workdir_param)
-                                logging.info(out)
-                            else:
-                                cc_process = self.run(cmd, popen=True, **workdir_param)
-                                for line in iter(lambda: cc_process.stdout.readline(), ''):
-                                    logging.info(f'\t\t\t{line.rstrip()}')
-                                    if cc_process.poll():
-                                        break
-                                
-                                cc_process.wait(timeout=5)
-                                ec = cc_process.poll()
-
-                            assert ec == 0
-
-                # Deploy
-                # Find all .wasm files and assume .abi is there as well
-                ec, out = self.run(
-                    ['find', build_dir, '-type', 'f', '-name', '*.wasm']
-                )
-                logging.info(f'wasm candidates:\n{out}')
-                wasm_location = None
-                wasm_file = None
-                abi_file = None
-                for matching_file in out.rstrip().split('\n'):
-                    splt_path = matching_file.split('/')
-                    filename = splt_path[-1]
-                    stem = filename.split('.')[0]
-
-                    if stem in contract_node.name:
-                        wasm_location = '/'.join(splt_path[:-1])
-                        wasm_file = matching_file
-                        abi_file = matching_file.replace('.wasm', '.abi')
-
-                logging.info('deploy...')
-                logging.info(f'wasm loc: {wasm_location}')
-                logging.info(f'wasm: {wasm_file}')
-                logging.info(f'abi: {abi_file}')
-                cmd = [
-                    'cleos', 'set', 'contract', contract_node.name,
-                    wasm_location,
-                    wasm_file,
-                    abi_file,
-                    '-p', f'{contract_node.name}@active'
-                ]
-                retry = 1
-                while retry < 4:
-                    logging.info(f'deplot attempt {retry}')
-
-                    ec, out = self.run(cmd)
-                    logging.info(out)
-                        
-                    if ec == 0:
-                        break
-
-                    retry += 1
-    
-                if ec == 0:
-                    logging.info('deployed')
+    def __exit__(self, type, value, traceback):
+        ...
 
     def push_action(
         self,
@@ -496,21 +562,6 @@ class CLEOSWrapper:
 
         return ec, out
 
-    def create_key_pair(self):
-        ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
-        assert ec == 0
-        assert ('Private key' in out) and ('Public key' in out)
-        lines = out.split('\n')
-        logging.info(out)
-        return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
-
-    def import_key(self, private_key):
-        ec, out = self.run(
-            ['cleos', 'wallet', 'import', '--private-key', private_key]
-        )
-        logging.info(out)
-        return ec
-
     def create_account(
         self,
         owner: str,
@@ -520,6 +571,33 @@ class CLEOSWrapper:
         if not key:
             key = self.dev_wallet_pkey
         ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
+        logging.info(out)
+        assert ec == 0
+        assert 'warning: transaction executed locally' in out
+        return ec, out
+
+    def create_account_staked(
+        self,
+        owner: str,
+        name: str,
+        net: str = '1000.0000 SYS',
+        cpu: str = '1000.0000 SYS',
+        ram: int = 8192,
+        key: Optional[str] = None
+    ):
+        if not key:
+            key = self.dev_wallet_pkey
+        ec, out = self.run([
+            'cleos',
+            'system',
+            'newaccount',
+            owner,
+            '--transfer',
+            name, key,
+            '--stake-net', net,
+            '--stake-cpu', cpu,
+            '--buy-ram-kbytes', str(ram)
+        ])
         logging.info(out)
         assert ec == 0
         assert 'warning: transaction executed locally' in out
@@ -536,11 +614,14 @@ class CLEOSWrapper:
         done = False
         rows = []
         while not done:
-            ec, out = self.run(
-                ['cleos', 'get', 'table', account, scope, table, '-l', '1000', *args]
-            )
+            ec, out = self.run([
+                'cleos', 'get', 'table',
+                account, scope, table,
+                '-l', '1000', *args
+            ])
             if ec != 0:
                 logging.critical(out)
+
             assert ec == 0
             out = json.loads(out)
             rows.extend(out['rows']) 
@@ -553,6 +634,9 @@ class CLEOSWrapper:
         assert ec == 0
         return json.loads(out)
 
+    def get_resources(self, account: str):
+        return self.get_table('eosio', account, 'userres')
+
     def new_account(self, name: Optional[str] = None):
         if name:
             account_name = name
@@ -561,8 +645,173 @@ class CLEOSWrapper:
 
         private_key, public_key = self.create_key_pair()
         self.import_key(private_key)
-        self.create_account('eosio', account_name, public_key)
+        self.create_account_staked('eosio', account_name, key=public_key)
         return account_name
+
+    def buy_ram_bytes(
+        self,
+        payer,
+        amount,
+        receiver=None
+    ):
+        if not receiver:
+            receiver = payer
+
+        return self.push_action(
+            'eosio', 'buyrambytes',
+            [payer, receiver, amount],
+            f'{payer}@active'
+        )
+
+    # TODO: fix this
+    # def create_multi_sig_account(
+    #     self,
+    #     owners,
+    #     target_permission = 'active',
+    #     parent_permission: Optional[str] = None 
+    # ):
+    #     msig_account = self.new_account()
+
+    #     cmd = [
+    #         'cleos', 'set', 'account', 'permission',
+    #         msig_account, target_permission,
+    #         json.dumps(
+    #             {
+    #                 'threshold': len(owners),
+    #                 'keys': [],
+    #                 'accounts': [
+    #                     {
+    #                         'permission': {
+    #                             'actor': perm[0],
+    #                             'permission': perm[1]
+    #                         },
+    #                         'weight': 1
+    #                     } for perm in (
+    #                         owner.split('@')
+    #                         for owner in owners
+    #                     )
+    #                 ],
+    #                 'waits': []
+    #             }
+    #         ),
+    #         '-p', f'{msig_account}@owner'
+    #     ]
+    #     if parent_permission:
+    #         cmd.insert(-2, parent_permission)
+
+    #     ec, out = self.run(cmd)
+    #     logging.info(cmd)
+    #     logging.info(out)
+    #     assert ec == 0
+
+    #     return msig_account
+
+
+    def wait_blocks(self, n: int):
+        start = self.get_info()['head_block_num']
+        while (info := self.get_info())['head_block_num'] - start < n:
+            time.sleep(0.1)
+
+    def multi_sig_propose(
+        self,
+        proposer,
+        req_permissions: List[str],  # [ 'name1@active', 'name2@active' ]
+        tx_petmissions: List[str],
+        contract,
+        action_name,
+        data
+    ) -> str:
+
+        proposal_name = random_eosio_name()
+        cmd = [
+            'cleos',
+            'multisig',
+            'propose',
+            proposal_name,
+            json.dumps([
+                {'actor': perm[0], 'permission': perm[1]}
+                for perm in [p.split('@') for p in req_permissions]
+            ]),
+            json.dumps([
+                {'actor': perm[0], 'permission': perm[1]}
+                for perm in [p.split('@') for p in tx_petmissions]
+            ]),
+            contract,
+            action_name,
+            json.dumps(data),
+            '-p', proposer
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        assert ec == 0
+
+        return proposal_name
+
+    def multi_sig_approve(
+        self,
+        proposer,
+        proposal_name,
+        permissions,
+        approver
+    ):
+        cmd = [
+            'cleos',
+            'multisig',
+            'approve',
+            proposer,
+            proposal_name,
+            *[
+                json.dumps({'actor': perm[0], 'permission': perm[1]})
+                for perm in [p.split('@') for p in permissions]
+            ],
+            '-p', approver
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        return ec, out
+
+    def multi_sig_exec(
+        self,
+        proposer,
+        proposal_name,
+        permission,
+        wait=10
+    ):
+        cmd = [
+            'cleos',
+            'multisig',
+            'exec',
+            proposer,
+            proposal_name,
+            '-p', permission
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+
+        if ec == 0:
+            self.wait_blocks(wait)
+
+        return ec, out
+
+    def multi_sig_review(
+        self,
+        proposer,
+        proposal_name
+    ):
+        cmd = [
+            'cleos',
+            'multisig',
+            'review',
+            proposer,
+            proposal_name
+        ]
+        ec, out =  self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        return ec, out
 
     """
     Token helpers
@@ -583,11 +832,17 @@ class CLEOSWrapper:
         account: str,
         token_contract='eosio.token'
     ) -> str:
-        return self.get_table(
+        balances = self.get_table(
             token_contract,
             account,
             'accounts'
-        )[0]['balance']
+        )
+        if len(balances) == 1:
+            return balances[0]['balance']
+        elif len(balances) > 1:
+            return balances
+        else:
+            return None
 
     def create_token(
         self,
@@ -647,61 +902,53 @@ class CLEOSWrapper:
         )
 
 
+    def init_sys_token(self):
+        if not self._sys_token_init:
+            self._sys_token_init = True
+            max_supply = f'{10000000000:.4f} SYS'
+            ec, _ = self.create_token('eosio', max_supply)
+            assert ec == 0
+            ec, _ = self.issue_token('eosio', max_supply, __name__)
+            assert ec == 0
+
+
+SYS_CONTRACTS_ROOTDIR = '/usr/opt/telos.contracts'
+CONTRACTS_ROOTDIR = '/root/contracts'
+CUSTOM_INCLUDES_DIR = '/root/includes'
+
+
 @pytest.fixture(scope='session')
 def eosio_testnet(request):
-    eosio_cdt_v = request.config.getoption('--cdt-version')
 
-    if request.config.getoption('--native'):
-
-        sys_contracts = request.config.getoption('--sys-contracts')
-        sys_contracts = (
-            None if sys_contracts == 'none' else str(Path(sys_contracts).resolve())
-        )
-
-        cleos_api = CLEOSWrapper(eosio_cdt_v, sys_contracts=sys_contracts)
-
-        try:
-            cleos_api.start_services()
-            cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(
-                skip_build=request.config.getoption('--skip-build'),
-                force_build=request.config.getoption('--force-build')
-            )
-            
-            yield cleos_api
-
-            cleos_api.stop_services()
-
-        except BaseException as ex:
-            cleos_api.stop_services()
-            cleos_api.dump_services_output()
-            raise
-
-    else:
-
-        dockerctl = DockerCtl(request.config.option.dockerurl)
-        dockerctl.client.ping()       
-
-        contracts_wd = Mount(
+    dockerctl = DockerCtl(request.config.option.dockerurl)
+    dockerctl.client.ping()
+    
+    docker_mounts = [
+        Mount(
             CONTRACTS_ROOTDIR,  # target
             str(Path('contracts').resolve()),  # source
             'bind'
+        ),
+        *[Mount(
+            f'{CUSTOM_INCLUDES_DIR}/{i}',
+            str(Path(inc_dir).resolve()),
+            'bind'
+        ) for i, inc_dir in enumerate(request.config.getoption('--include'))],
+        Mount(
+            SYS_CONTRACTS_ROOTDIR,
+            'pytest-eosiocdt.syscontracts'
         )
+    ]
 
-
-        with dockerctl.run(
-            f'guilledk/pytest-eosiocdt:vtestnet-eosio-{eosio_cdt_v}',
-            mounts=[contracts_wd] + _additional_mounts
-        ) as containers:
-            cleos_api = CLEOSWrapper(
-                eosio_cdt_v,
-                container=containers[0],
-                sys_contracts='/usr/opt/eosio.contracts'
-            )
-            cleos_api.wallet_setup()
-            cleos_api.deploy_contracts(
-                skip_build=request.config.getoption('--skip-build'),
-                force_build=request.config.getoption('--force-build')
-            )
-        
-            yield cleos_api
+    if dockerctl.client.info()['NCPU'] < 2:
+        logging.warning('eosio-cpp needs at least 2 logical cores')
+   
+    with get_container(
+        dockerctl,
+        'guilledk/pytest-eosiocdt',
+        'vtestnet',
+        mounts=docker_mounts,
+        publish_all_ports=True
+    ) as container:
+        with EOSIOTestSession(container, request, dockerctl, docker_mounts) as session:
+            yield session

@@ -1,4 +1,7 @@
+six
+toml
 pytest
 psutil
 natsort
-git+git://github.com/tgoodlet/pytest-dockerctl.git
+requests
+git+git://github.com/pikers/pytest-dockerctl.git

@@ -10,9 +10,12 @@ setup(
 	entry_points={"pytest11": ["pytest-eosiocdt = pytest_eosiocdt.plugin"]},
 	classifiers=["Framework :: Pytest"],
 	install_requires=[
+        'six',  # docker,
+        'toml',
 		'pytest',
 		'psutil',
-                'natsort',
-		'pytest-dockerctl@git+git://github.com/tgoodlet/pytest-dockerctl.git'
+        'natsort',
+        'requests',
+		'pytest-dockerctl@git+git://github.com/pikers/pytest-dockerctl.git'
 	]
 )

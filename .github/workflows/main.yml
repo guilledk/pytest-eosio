@@ -1,57 +1,21 @@
-name: pytest-eosiocdt
+name: Pytest Tests
 
 on: [push]
 
 jobs:
   build:
 
-    runs-on: ubuntu-18.04
-    strategy:
-      matrix:
-        python-version: [3.8]
-
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Download EOSIO
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eos/releases/download/v2.0.9/eosio_2.0.9-1-ubuntu-18.04_amd64.deb
-    - name: Download EOSIO cdt
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eosio.cdt/releases/download/v1.6.3/eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
-    - name: Download System Contract Sources
-      uses: wei/wget@v1
-      with:
-        args: https://github.com/EOSIO/eosio.contracts/archive/v1.8.3.tar.gz -O eosio.contracts.tar.gz
-    - name: Extract System Contracts
-      run: tar xf eosio.contracts.tar.gz
-    - name: Install System Contracts
-      working-directory: ./eosio.contracts-1.8.3
-      run: |
-          sudo mkdir -p /usr/opt/
-          sudo cp -r contracts /usr/opt/eosio.contracts 
-    - name: Cleanup System Contracts install
-      working-directory: /usr/opt/eosio.contracts
-      run: sudo rm -rdf icons CMakeLists.txt
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-            make \
-            cmake \
-            cmake-data \
-            build-essential \
-            ./eosio_2.0.9-1-ubuntu-18.04_amd64.deb \
-            ./eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
-        pip install --upgrade pip
-        pip install git+git://github.com/guilledk/pytest-eosiocdt.git
-      env:
-        DEBIAN_FRONTEND: noninteractive
-    - name: Run tests
-      run: |
-        pytest --native --sys-contracts=/usr/opt/eosio.contracts
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
+        run: |
+          sudo pip install --upgrade pip
+          sudo pip install -e .
+      - name: Run tests
+        run: sudo pytest
+

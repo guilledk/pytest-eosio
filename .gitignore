@@ -2,5 +2,6 @@
 .python-version
 *.egg-info
 **/.binfo
+**/.pytest-eosiocdt
 **/build
 **/__pycache__
