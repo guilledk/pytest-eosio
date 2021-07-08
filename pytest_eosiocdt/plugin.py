@@ -283,6 +283,8 @@ class EOSIOTestSession:
             'active', '--add-code'
         ]
         ec, out = self.run(cmd)
+        logging.info(f'\tcmd: {cmd}')
+        logging.info(f'\t{out}')
         assert ec == 0
         logging.info('\tpermissions granted.')
 
@@ -661,48 +663,54 @@ class EOSIOTestSession:
             f'{payer}@active'
         )
 
-    def create_multi_sig_account(
-        self,
-        owners,
-        target_permission = 'active',
-        parent_permission: Optional[str] = None 
-    ):
-        msig_account = self.new_account()
+    # TODO: fix this
+    # def create_multi_sig_account(
+    #     self,
+    #     owners,
+    #     target_permission = 'active',
+    #     parent_permission: Optional[str] = None 
+    # ):
+    #     msig_account = self.new_account()
 
-        cmd = [
-            'cleos', 'set', 'account', 'permission',
-            msig_account, target_permission,
-            json.dumps(
-                {
-                    'threshold': len(owners),
-                    'keys': [],
-                    'accounts': [
-                        {
-                            'permission': {
-                                'actor': perm[0],
-                                'permission': perm[1]
-                            },
-                            'weight': 1
-                        } for perm in (
-                            owner.split('@')
-                            for owner in owners
-                        )
-                    ],
-                    'waits': []
-                }
-            ),
-            '-p', f'{msig_account}@owner'
-        ]
-        if parent_permission:
-            cmd.insert(-2, parent_permission)
+    #     cmd = [
+    #         'cleos', 'set', 'account', 'permission',
+    #         msig_account, target_permission,
+    #         json.dumps(
+    #             {
+    #                 'threshold': len(owners),
+    #                 'keys': [],
+    #                 'accounts': [
+    #                     {
+    #                         'permission': {
+    #                             'actor': perm[0],
+    #                             'permission': perm[1]
+    #                         },
+    #                         'weight': 1
+    #                     } for perm in (
+    #                         owner.split('@')
+    #                         for owner in owners
+    #                     )
+    #                 ],
+    #                 'waits': []
+    #             }
+    #         ),
+    #         '-p', f'{msig_account}@owner'
+    #     ]
+    #     if parent_permission:
+    #         cmd.insert(-2, parent_permission)
 
-        ec, out = self.run(cmd)
-        logging.info(cmd)
-        logging.info(out)
-        assert ec == 0
+    #     ec, out = self.run(cmd)
+    #     logging.info(cmd)
+    #     logging.info(out)
+    #     assert ec == 0
 
-        return msig_account
+    #     return msig_account
 
+
+    def wait_blocks(self, n: int):
+        start = self.get_info()['head_block_num']
+        while (info := self.get_info())['head_block_num'] - start < n:
+            time.sleep(0.1)
 
     def multi_sig_propose(
         self,
@@ -747,7 +755,7 @@ class EOSIOTestSession:
         permissions,
         approver
     ):
-        return self.run([
+        cmd = [
             'cleos',
             'multisig',
             'approve',
@@ -758,37 +766,52 @@ class EOSIOTestSession:
                 for perm in [p.split('@') for p in permissions]
             ],
             '-p', approver
-        ])
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        return ec, out
 
     def multi_sig_exec(
         self,
         proposer,
         proposal_name,
-        permission
+        permission,
+        wait=10
     ):
-        return self.run([
+        cmd = [
             'cleos',
             'multisig',
             'exec',
             proposer,
             proposal_name,
             '-p', permission
-        ])
+        ]
+        ec, out = self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+
+        if ec == 0:
+            self.wait_blocks(wait)
+
+        return ec, out
 
     def multi_sig_review(
         self,
         proposer,
-        proposal_name,
-        permission
+        proposal_name
     ):
-        return self.run([
+        cmd = [
             'cleos',
             'multisig',
             'review',
             proposer,
             proposal_name
-        ])
-
+        ]
+        ec, out =  self.run(cmd)
+        logging.info(cmd)
+        logging.info(out)
+        return ec, out
 
     """
     Token helpers
@@ -809,11 +832,17 @@ class EOSIOTestSession:
         account: str,
         token_contract='eosio.token'
     ) -> str:
-        return self.get_table(
+        balances = self.get_table(
             token_contract,
             account,
             'accounts'
-        )[0]['balance']
+        )
+        if len(balances) == 1:
+            return balances[0]['balance']
+        elif len(balances) > 1:
+            return balances
+        else:
+            return None
 
     def create_token(
         self,
