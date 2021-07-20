@@ -20,6 +20,37 @@ from docker.errors import NotFound
 EOSIO_DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
 
+class Symbol:
+
+    def __init__(self, code: str, precision: int):
+        self.code = code
+        self.precision = precision
+
+    @property
+    def unit(self) -> float:
+        return 1 / (10 ** self.precision)
+
+    def __str__(self) -> str:
+        return f'{self.precision},{self.code}'
+
+
+class Asset:
+
+    def __init__(self, amount: float, symbol: Symbol):
+        self.amount = amount
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        number = format(self.amount, f'.{self.symbol.precision}f')
+        return f'{number} {self.symbol.code}'
+
+
+def asset_from_str(str_asset: str):
+    numeric, sym = str_asset.split(' ')
+    precision = len(numeric) - numeric.index('.') - 1
+    return Asset(float(numeric), Symbol(sym, precision))
+
+
 def asset_from_decimal(dec: Decimal, precision: int, sym: str):
     result = str(dec)
     pindex = result.index('.')

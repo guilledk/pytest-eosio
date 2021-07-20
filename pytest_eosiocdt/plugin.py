@@ -8,7 +8,7 @@ import logging
 import tarfile
 import subprocess
 
-from typing import Optional, List, Dict
+from typing import Optional, Union, Tuple, List, Dict
 from pathlib import Path
 from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
@@ -27,7 +27,9 @@ from .sugar import (
     hash_file,
     hash_dir,
     random_eosio_name,
-    get_container
+    get_container,
+    Asset,
+    Symbol
 )
 
 
@@ -321,7 +323,7 @@ class EOSIOTestSession:
             '-p', f'{account_name}@active'
         ]
         retry = 1
-        while retry < 4:
+        while retry < 8:
             logging.info(f'deplot attempt {retry}')
 
             ec, out = self.run(cmd)
@@ -538,10 +540,11 @@ class EOSIOTestSession:
         self,
         contract: str,
         action: str,
-        args: 'List',
+        args: List[str],
         permissions: str,
         retry: int = 2
     ):
+        args = [str(arg) for arg in args]
         logging.info(f"push action: {action}({args}) as {permissions}")
         cmd = [
             'cleos', 'push', 'action', contract, action,
@@ -777,7 +780,7 @@ class EOSIOTestSession:
         proposer,
         proposal_name,
         permission,
-        wait=10
+        wait=3
     ):
         cmd = [
             'cleos',
@@ -847,27 +850,27 @@ class EOSIOTestSession:
     def create_token(
         self,
         issuer: str,
-        max_supply: str,
+        max_supply: Union[str, Asset],
         token_contract='eosio.token'
     ):
         return self.push_action(
             token_contract,
             'create',
-            [issuer, max_supply],
+            [issuer, str(max_supply)],
             'eosio.token'
         )
 
     def issue_token(
         self,
         issuer: str,
-        quantity: str,
+        quantity: Union[str, Asset],
         memo: str,
         token_contract='eosio.token'
     ):
         return self.push_action(
             token_contract,
             'issue',
-            [issuer, quantity, memo],
+            [issuer, str(quantity), memo],
             f'{issuer}@active'
         )
 
@@ -875,28 +878,28 @@ class EOSIOTestSession:
         self,
         _from: str,
         _to: str,
-        quantity: str,
+        quantity: Union[str, Asset],
         memo: str,
         token_contract='eosio.token'
     ):
         return self.push_action(
             token_contract,
             'transfer',
-            [_from, _to, quantity, memo],
+            [_from, _to, str(quantity), memo],
             f'{_from}@active'
         )
 
     def give_token(
         self,
         _to: str,
-        quantity: str,
+        quantity: Union[str, Asset],
         memo: str = '',
         token_contract='eosio.token'
     ):
         return self.transfer_token(
             token_contract,
             _to,
-            quantity,
+            str(quantity),
             memo,
             token_contract=token_contract
         )
