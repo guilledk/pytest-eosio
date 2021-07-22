@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
-from typing import List
+from typing import List, Union
 
 import pytest
 
+from .sugar import Symbol, Asset, asset_from_str, symbol_from_str
 from .plugin import EOSIOTestSession
 from .contract import SmartContract
+
+
+telos_token = Symbol('TLOS', 4)
+vote_token = Symbol('VOTE', 4)
 
 
 class TelosDecide(SmartContract):
@@ -61,16 +66,22 @@ class TelosDecide(SmartContract):
             'treasuries'
         )
 
-    def get_treasury(self, sym: str):
+    def get_treasury(self, sym: Union[str, Symbol]):
+        if isinstance(sym, str):
+            sym = symbol_from_str(sym) 
+
         treasuries = self.get_treasuries()
         return next((
             row for row in treasuries
-            if sym in row['max_supply']),
+            if sym.code in row['max_supply']),
             None
         )
 
-    def toggle(self, sym: str, setting: str):
-        treasury = self.get_treasury(sym.split(',')[1])
+    def toggle(self, sym: [str, Symbol], setting: str):
+        if isinstance(sym, str):
+            sym = sym.split(',')[1]
+
+        treasury = self.get_treasury(sym)
         assert treasury is not None
         return self.push_action(
             'toggle',
@@ -105,33 +116,44 @@ class TelosDecide(SmartContract):
         self,
         voter: str
     ):
-        return self.get_table(
+        voter = self.get_table(
             voter,
             'voters'
         )
+        assert len(voter) == 1
+        return voter[0]
    
     def mint(
         self,
         to: str,
-        amount: str,
+        quantity: Union[str, Asset],
         memo: str
     ):
-        sym = amount.split(' ')[-1]
+        if isinstance(quantity, Asset):
+            sym = quantity.symbol
+        else:
+            sym = asset_from_str(quantity).symbol 
+        
         treasury = self.get_treasury(sym)
         assert treasury is not None
+        
         return self.push_action(
             'mint',
-            [to, amount, memo],
+            [to, quantity, memo],
             f'{treasury["manager"]}@active'
         )
 
     def burn(
         self,
-        quantity: str,
+        quantity: Union[str, Asset],
         memo: str
     ):
-        sym = quantity.split(' ')[-1]
-        treasury = self.get_treasury(sym) 
+        if isinstance(quantity, Asset):
+            sym = quantity.symbol
+        else:
+            sym = asset_from_str(quantity).symbol 
+        
+        treasury = self.get_treasury(sym)
         assert treasury is not None
 
         return self.push_action(
@@ -140,20 +162,67 @@ class TelosDecide(SmartContract):
             f'{treasury["manager"]}@active'
         )
 
+    def burn_all(
+        self,
+        sym: Union[str, Symbol],
+        memo: str = 'testing burn'
+    ):
+        manager = self.get_treasury(sym)['manager']
+        return self.burn(
+            self.get_voter(manager)['liquid'],
+            memo
+        )
+
     def reclaim(
         self,
         voter: str,
-        quantity: str,
-        memo: str
+        quantity: Union[str, Asset],
+        memo: str = 'testing reclaim'
     ):
-        sym = quantity.split(' ')[-1]
-        treasury = self.get_treasury(sym) 
+        if isinstance(quantity, Asset):
+            sym = quantity.symbol
+        else:
+            sym = asset_from_str(quantity).symbol 
+        
+        treasury = self.get_treasury(sym)
         assert treasury is not None
         return self.push_action(
             'reclaim',
             [voter, quantity, memo],
             f'{treasury["manager"]}@active'
         )
+
+    def reclaim_all(self, voter: str, memo: str = 'testing reclaim'):
+        return self.reclaim(
+            voter,
+            asset_from_str(self.get_voter(voter)['liquid']),
+            memo
+        )
+
+    def stake(
+        self,
+        voter: str,
+        quantity: Union[str, Asset]
+    ):
+        return self.push_action(
+            'stake',
+            [voter, quantity],
+            f'{voter}@active'
+        )
+
+    def unstake(
+        self,
+        voter: str,
+        quantity: Union[str, Asset]
+    ):
+        return self.push_action(
+            'unstake',
+            [voter, quantity],
+            f'{voter}@active'
+        )
+
+    def unstake_all(self, voter: str):
+        return self.unstake(voter, asset_from_str(self.get_voter(voter)['staked']))
 
     def new_ballot(
         self,

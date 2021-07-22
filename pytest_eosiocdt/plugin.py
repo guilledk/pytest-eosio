@@ -85,8 +85,25 @@ class EOSIOTestSession:
 
         self._sys_token_init = False
 
-    def run(self, *args, **kwargs):
-        ec, out = self.vtestnet.exec_run(*args, **kwargs)
+    def run(
+        self,
+        cmd: List[str],
+        retry: int = 3,
+        *args, **kwargs
+    ):
+        """Run command inside the virtual testnet docker container, warning:
+            its normal for blockchain interactions to timeout so by default
+            this method retries commands 3 times. ``retry=0`` should be passed
+            to avoid retry.
+        """
+
+        for i in range(1, 2 + retry):
+            ec, out = self.vtestnet.exec_run(cmd, *args, **kwargs)
+            if ec == 0:
+                break
+
+            logging.warning(f'cmd run retry num {i}...')
+                
         return ec, out.decode('utf-8')
 
     def get_manifest(self):
@@ -196,6 +213,7 @@ class EOSIOTestSession:
 
         ec, out = self.run(
             ['sh', '-c', 'echo */include'],
+            retry=0,
             workdir=f'{SYS_CONTRACTS_ROOTDIR}/contracts'
         )
         assert ec == 0
@@ -291,7 +309,8 @@ class EOSIOTestSession:
         logging.info('\tpermissions granted.')
 
         ec, out = self.run(
-            ['find', build_dir, '-type', 'f', '-name', '*.wasm']
+            ['find', build_dir, '-type', 'f', '-name', '*.wasm'],
+            retry=0
         )
         logging.info(f'wasm candidates:\n{out}')
         wasms = out.rstrip().split('\n')
@@ -322,17 +341,10 @@ class EOSIOTestSession:
             abi_file,
             '-p', f'{account_name}@active'
         ]
-        retry = 1
-        while retry < 8:
-            logging.info(f'deplot attempt {retry}')
-
-            ec, out = self.run(cmd)
-            logging.info(out)
-                
-            if ec == 0:
-                break
-
-            retry += 1
+        
+        logging.info('contract deploy: ')
+        ec, out = self.run(cmd, retry=6)
+        logging.info(out)
 
         if ec == 0:
             logging.info('deployed')
@@ -408,26 +420,24 @@ class EOSIOTestSession:
         manifest = self.get_manifest()
 
         for contract_name, config in manifest.items():
-            if 'name' in config:
-                contract_name = config['name']
+            acc_name = config['name'] if 'name' in config else None
 
             self.deploy_contract(
-                contract_name, config['cdir'])
+                contract_name, config['cdir'], account_name=acc_name)
 
     def create_key_pair(self):
         ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
         assert ec == 0
         assert ('Private key' in out) and ('Public key' in out)
         lines = out.split('\n')
-        logging.info(out)
+        logging.info('created key pair')
         return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
 
     def import_key(self, private_key):
         ec, out = self.run(
             ['cleos', 'wallet', 'import', '--private-key', private_key]
         )
-        logging.info(out)
-        return ec
+        assert ec == 0
 
     def setup_wallet(self):
         """Create Development Wallet
@@ -439,7 +449,6 @@ class EOSIOTestSession:
         logging.info('create wallet...')
         ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
         wallet_key = out.split('\n')[-2].strip('\"')
-        logging.info(out)
         assert ec == 0
         assert len(wallet_key) == 53
         logging.info('wallet created')
@@ -476,8 +485,7 @@ class EOSIOTestSession:
 
         # Step 5: Import the Development Key
         logging.info('import development key...')
-        ec = self.import_key('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
-        assert ec == 0
+        self.import_key('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
         logging.info('imported dev key')
 
     def get_feature_digest(self, feature_name):
@@ -542,26 +550,30 @@ class EOSIOTestSession:
         action: str,
         args: List[str],
         permissions: str,
-        retry: int = 2
+        retry=3
     ):
-        args = [str(arg) for arg in args]
+        args = [
+            str(arg)
+            if (
+                isinstance(arg, Symbol) or
+                isinstance(arg, Asset)
+            )
+            else arg
+            for arg in args
+        ]
         logging.info(f"push action: {action}({args}) as {permissions}")
         cmd = [
             'cleos', 'push', 'action', contract, action,
             json.dumps(args), '-p', permissions, '-j', '-f'
         ]
-        for i in range(retry + 1):
-            ec, out = self.run(cmd)
-            try:
-                out = json.loads(out)
-                logging.info(collect_stdout(out))
-                
-            except (json.JSONDecodeError, TypeError):
-                logging.error(f'\n{out}')
-                logging.error(f'cmd line: {cmd}')
-
-            if ec == 0:
-                break
+        ec, out = self.run(cmd, retry=retry)
+        try:
+            out = json.loads(out)
+            logging.info(collect_stdout(out))
+            
+        except (json.JSONDecodeError, TypeError):
+            logging.error(f'\n{out}')
+            logging.error(f'cmd line: {cmd}')
 
         return ec, out
 
@@ -574,9 +586,8 @@ class EOSIOTestSession:
         if not key:
             key = self.dev_wallet_pkey
         ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
-        logging.info(out)
         assert ec == 0
-        assert 'warning: transaction executed locally' in out
+        logging.info(f'created account: {name}')
         return ec, out
 
     def create_account_staked(
@@ -601,9 +612,8 @@ class EOSIOTestSession:
             '--stake-cpu', cpu,
             '--buy-ram-kbytes', str(ram)
         ])
-        logging.info(out)
         assert ec == 0
-        assert 'warning: transaction executed locally' in out
+        logging.info(f'created staked account: {name}')
         return ec, out
 
 
@@ -666,50 +676,6 @@ class EOSIOTestSession:
             f'{payer}@active'
         )
 
-    # TODO: fix this
-    # def create_multi_sig_account(
-    #     self,
-    #     owners,
-    #     target_permission = 'active',
-    #     parent_permission: Optional[str] = None 
-    # ):
-    #     msig_account = self.new_account()
-
-    #     cmd = [
-    #         'cleos', 'set', 'account', 'permission',
-    #         msig_account, target_permission,
-    #         json.dumps(
-    #             {
-    #                 'threshold': len(owners),
-    #                 'keys': [],
-    #                 'accounts': [
-    #                     {
-    #                         'permission': {
-    #                             'actor': perm[0],
-    #                             'permission': perm[1]
-    #                         },
-    #                         'weight': 1
-    #                     } for perm in (
-    #                         owner.split('@')
-    #                         for owner in owners
-    #                     )
-    #                 ],
-    #                 'waits': []
-    #             }
-    #         ),
-    #         '-p', f'{msig_account}@owner'
-    #     ]
-    #     if parent_permission:
-    #         cmd.insert(-2, parent_permission)
-
-    #     ec, out = self.run(cmd)
-    #     logging.info(cmd)
-    #     logging.info(out)
-    #     assert ec == 0
-
-    #     return msig_account
-
-
     def wait_blocks(self, n: int):
         start = self.get_info()['head_block_num']
         while (info := self.get_info())['head_block_num'] - start < n:
@@ -745,8 +711,6 @@ class EOSIOTestSession:
             '-p', proposer
         ]
         ec, out = self.run(cmd)
-        logging.info(cmd)
-        logging.info(out)
         assert ec == 0
 
         return proposal_name
@@ -771,8 +735,6 @@ class EOSIOTestSession:
             '-p', approver
         ]
         ec, out = self.run(cmd)
-        logging.info(cmd)
-        logging.info(out)
         return ec, out
 
     def multi_sig_exec(
@@ -791,8 +753,6 @@ class EOSIOTestSession:
             '-p', permission
         ]
         ec, out = self.run(cmd)
-        logging.info(cmd)
-        logging.info(out)
 
         if ec == 0:
             self.wait_blocks(wait)
@@ -812,8 +772,6 @@ class EOSIOTestSession:
             proposal_name
         ]
         ec, out =  self.run(cmd)
-        logging.info(cmd)
-        logging.info(out)
         return ec, out
 
     """

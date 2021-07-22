@@ -30,8 +30,19 @@ class Symbol:
     def unit(self) -> float:
         return 1 / (10 ** self.precision)
 
+    def __eq__(self, other) -> bool:
+        return (
+            self.code == other.code and
+            self.precision == other.precision
+        )
+
     def __str__(self) -> str:
         return f'{self.precision},{self.code}'
+
+
+def symbol_from_str(str_sym: str):
+    prec, code = str_sym.split(',')
+    return Symbol(code, int(prec))
 
 
 class Asset:
@@ -39,6 +50,12 @@ class Asset:
     def __init__(self, amount: float, symbol: Symbol):
         self.amount = amount
         self.symbol = symbol
+
+    def __eq__(self, other) -> bool:
+        return (
+            self.amount == other.amount and
+            self.symbol == other.symbol
+        )
 
     def __str__(self) -> str:
         number = format(self.amount, f'.{self.symbol.precision}f')
@@ -68,6 +85,69 @@ def eosio_format_date(date: datetime) -> str:
 
 def eosio_parse_date(date: str) -> datetime:
     return datetime.strptime(date, EOSIO_DATE_FORMAT)
+
+
+class Name:
+
+    def __init__(self, _str: str):
+        
+        assert len(_str) <= 13
+        assert not bool(re.compile(r'[^a-z0-9.]').search(_str))
+
+        self._str = _str
+
+    def __str__(self) -> str:
+        return self._str
+
+    @property
+    def value(self) -> int:
+        """Convert name to its number repr
+        """
+
+        def str_to_hex(c):
+            hex_data = hexlify(bytearray(c, 'ascii')).decode()
+            return int(hex_data, 16)
+
+
+        def char_subtraction(a, b, add):
+            x = str_to_hex(a)
+            y = str_to_hex(b)
+            ans = str((x - y) + add)
+            if len(ans) % 2 == 1:
+                ans = '0' + ans
+            return int(ans)
+
+
+        def char_to_symbol(c):
+            ''' '''
+            if c >= 'a' and c <= 'z':
+                return char_subtraction(c, 'a', 6)
+            if c >= '1' and c <= '5':
+                return char_subtraction(c, '1', 1)
+            return 0
+
+        i = 0
+        name = 0
+        while i < len(s) :
+            name += (char_to_symbol(s[i]) & 0x1F) << (64-5 * (i + 1))
+            i += 1
+        if i > 12 :
+            name |= char_to_symbol(s[11]) & 0x0F
+        return name
+
+
+def name_from_value(n: int) -> Name:
+    """Convert valid eosio name value to the internal representation
+    """
+    charmap = '.12345abcdefghijklmnopqrstuvwxyz'
+    name = ['.'] * 13
+    i = 0
+    while i <= 12:
+        c = charmap[n & (0x0F if i == 0 else 0x1F)]
+        name[12-i] = c
+        n >>= 4 if i == 0 else 5
+        i += 1
+    return Name(''.join(name).rstrip('.'))
 
 
 def str_to_hex(c):
