@@ -106,6 +106,18 @@ class EOSIOTestSession:
                 
         return ec, out.decode('utf-8')
 
+    def open_process(
+        self,
+        cmd: List[str],
+        **kwargs
+    ):
+        """Begin running the command inside the virtual container, return the
+        internal docker process id, and a stream for the standard output.
+        """
+        exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
+        exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+        return exec_id, exec_run
+
     def get_manifest(self):
         if self.manifest == {}:
             for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
