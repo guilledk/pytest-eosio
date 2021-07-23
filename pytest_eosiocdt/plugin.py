@@ -118,6 +118,21 @@ class EOSIOTestSession:
         exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
         return exec_id, exec_run
 
+    def wait_process(
+        self,
+        exec_id,
+        exec_stream
+    ):
+        """Collect output from process stream, then inspect process and return
+        exitcode.
+        """
+        out = ''
+        for chunk in exec_stream:
+            out += chunk.decode('utf-8')
+
+        info = self.dockerctl.client.api.exec_inspect(exec_id)
+        return info['ExitCode'], out
+
     def get_manifest(self):
         if self.manifest == {}:
             for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
