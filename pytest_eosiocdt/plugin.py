@@ -8,7 +8,7 @@ import logging
 import tarfile
 import subprocess
 
-from typing import Optional, Union, Tuple, List, Dict
+from typing import Iterator, Optional, Union, Tuple, List, Dict
 from pathlib import Path
 from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
@@ -460,11 +460,46 @@ class EOSIOTestSession:
         logging.info('created key pair')
         return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
 
-    def import_key(self, private_key):
+    def create_key_pairs(self, n: int):
+        procs = [
+            self.open_process(['cleos', 'create', 'key', '--to-console'])
+            for _ in range(n)
+        ]
+        results = [
+            self.wait_process(proc_id, proc_stream)
+            for proc_id, proc_stream in procs
+        ]
+        keys = []
+        for ec, out in results:
+            assert ec == 0
+            assert ('Private key' in out) and ('Public key' in out)
+            lines = out.split('\n')
+            keys.append((lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()))
+
+        logging.info(f'created {n} key pairs')
+        return keys
+
+    def import_key(self, private_key: str):
         ec, out = self.run(
             ['cleos', 'wallet', 'import', '--private-key', private_key]
         )
         assert ec == 0
+        logging.info('key imported')
+
+    def import_keys(self, private_keys: List[str]):
+        procs = [
+            self.open_process(
+                ['cleos', 'wallet', 'import', '--private-key', private_key])
+            for private_key in private_keys
+        ]
+        results = [
+            self.wait_process(proc_id, proc_stream)
+            for proc_id, proc_stream in procs
+        ]
+        for ec, _ in results:
+            assert ec == 0
+
+        logging.info(f'imported {len(private_keys)} keys')
 
     def setup_wallet(self):
         """Create Development Wallet
@@ -604,6 +639,26 @@ class EOSIOTestSession:
 
         return ec, out
 
+    def parallel_push_action(
+        self,
+        actions: Tuple[
+            Iterator[str],   # contract name
+            Iterator[str],   # action name
+            Iterator[List],  # params
+            Iterator[str]    # permissions
+        ]
+    ):
+        procs = [
+            self.open_process([
+                'cleos', 'push', 'action', contract, action,
+                json.dumps(args), '-p', permissions, '-j', '-f'
+            ]) for contract, action, args, permissions in zip(*actions)
+        ]
+        return [
+            self.wait_process(proc_id, proc_stream)
+            for proc_id, proc_stream in procs
+        ]
+
     def create_account(
         self,
         owner: str,
@@ -643,6 +698,36 @@ class EOSIOTestSession:
         logging.info(f'created staked account: {name}')
         return ec, out
 
+    def create_accounts_staked(
+        self,
+        owner: str,
+        names: List[str],
+        keys: List[str],
+        net: str = '1000.0000 SYS',
+        cpu: str = '1000.0000 SYS',
+        ram: int = 8192
+    ):
+        assert len(names) == len(keys)
+        procs = [
+            self.open_process([
+                'cleos',
+                'system',
+                'newaccount',
+                owner,
+                '--transfer',
+                name, key,
+                '--stake-net', net,
+                '--stake-cpu', cpu,
+                '--buy-ram-kbytes', str(ram)
+            ]) for name, key in zip(names, keys)
+        ]
+        results = [
+            self.wait_process(proc_id, proc_stream)
+            for proc_id, proc_stream in procs
+        ]
+        for ec, _ in results:
+            assert ec == 0
+        logging.info(f'created {len(names)} staked accounts.')
 
     def get_table(
         self,
@@ -687,6 +772,14 @@ class EOSIOTestSession:
         self.import_key(private_key)
         self.create_account_staked('eosio', account_name, key=public_key)
         return account_name
+
+    def new_accounts(self, n: int):
+        names = [random_eosio_name() for _ in range(n)]
+        keys = self.create_key_pairs(n)
+        self.import_keys([priv_key for priv_key, pub_key in keys])
+        self.create_accounts_staked(
+            'eosio', names, [pub_key for priv_key, pub_key in keys])
+        return names
 
     def buy_ram_bytes(
         self,
