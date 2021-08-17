@@ -36,6 +36,15 @@ from .sugar import (
 PLUGIN_PREFIX = 'contracts/.pytest-eosiocdt'
 
 
+def pytest_collection_modifyitems(session, config, items):
+    fixtures = set()
+    for item in items:
+        for name in item.fixturenames:
+            fixtures.add(name)
+
+    print(f'total fixtures: {fixtures}')
+
+
 def pytest_addoption(parser):
     parser.addoption(
         '--endpoint', action='store', default='', help='blockchain api endpoint to target'

@@ -20,6 +20,16 @@ from docker.errors import NotFound
 EOSIO_DATE_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
 
+def string_to_sym_code(sym):
+    ret = 0
+    for i, char in enumerate(sym):
+        if char >= 'A' or char <= 'Z':
+            code = ord(char)
+            ret |= code << 8 * i
+
+    return ret
+
+
 class Symbol:
 
     def __init__(self, code: str, precision: int):
@@ -128,11 +138,11 @@ class Name:
 
         i = 0
         name = 0
-        while i < len(s) :
-            name += (char_to_symbol(s[i]) & 0x1F) << (64-5 * (i + 1))
+        while i < len(self._str) :
+            name += (char_to_symbol(self._str[i]) & 0x1F) << (64-5 * (i + 1))
             i += 1
         if i > 12 :
-            name |= char_to_symbol(s[11]) & 0x0F
+            name |= char_to_symbol(self._str[11]) & 0x0F
         return name
 
 
@@ -289,7 +299,7 @@ def random_string(size=256):
     )
 
 def random_local_url():
-    return 'http://localhost/{random_string()}'
+    return f'http://localhost/{random_string(size=16)}'
 
 
 def random_token_symbol():
