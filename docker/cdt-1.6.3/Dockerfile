@@ -2,7 +2,12 @@ FROM ubuntu:18.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y build-essential wget make cmake
+RUN apt-get update && apt-get install -y git build-essential wget make software-properties-common
+
+# install latest cmake from kitware repo
+RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null
+RUN apt-add-repository 'deb https://apt.kitware.com/ubuntu/ bionic main'
+RUN apt-get update && apt-get install -y cmake 
 
 RUN wget https://github.com/EOSIO/eosio.cdt/releases/download/v1.6.3/eosio.cdt_1.6.3-1-ubuntu-18.04_amd64.deb
 

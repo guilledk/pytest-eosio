@@ -210,6 +210,15 @@ def name_to_string(n: int) -> str:
     return ''.join(name).rstrip('.')
 
 
+def find_in_balances(balances, symbol):
+    for balance in balances:
+        asset = asset_from_str(balance['balance'])
+        if asset.symbol == symbol:
+            return asset
+
+    return None
+
+
 def collect_stdout(out: Dict):
     assert isinstance(out, dict)
     output = ''
