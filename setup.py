@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
 	name='pytest-eosiocdt',
-	version='0.1a2',
+	version='0.1a3',
 	description='Pytest plugin for smart contract development',
 	author='Guillermo Rodriguez',
 	author_email='guillermor@fing.edu.uy',

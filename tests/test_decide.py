@@ -87,13 +87,7 @@ def test_decide_register_voter(telosdecide):
 
     assert ec == 0
 
-    voter_regs = telosdecide.get_voter(voter)
-
-    voter_reg = next((
-        row for row in voter_regs
-        if sym in row['liquid']),
-        None
-    )
+    voter_reg = telosdecide.get_voter(voter)
     assert voter_reg is not None
 
 
@@ -127,13 +121,7 @@ def test_decide_mint(telosdecide):
 
     assert ec == 0
 
-    voter_regs = telosdecide.get_voter(voter)
-
-    voter_reg = next((
-        row for row in voter_regs
-        if sym in row['liquid']),
-        None
-    )
+    voter_reg = telosdecide.get_voter(voter)
     assert voter_reg is not None
     assert voter_reg['liquid'] == minted
 

@@ -20,6 +20,8 @@ import psutil
 import requests
 
 from docker.types import Mount
+from docker.models.containers import Container
+
 from pytest_dockerctl import DockerCtl, waitfor
 
 from .sugar import (
@@ -31,18 +33,6 @@ from .sugar import (
     Asset,
     Symbol
 )
-
-
-PLUGIN_PREFIX = 'contracts/.pytest-eosiocdt'
-
-
-def pytest_collection_modifyitems(session, config, items):
-    fixtures = set()
-    for item in items:
-        for name in item.fixturenames:
-            fixtures.add(name)
-
-    print(f'total fixtures: {fixtures}')
 
 
 def pytest_addoption(parser):
@@ -61,11 +51,13 @@ def pytest_addoption(parser):
 
 
 class EOSIOTestSession:
+    """Main fixture used to access the testnet and manage the test session.
+    """
 
     def __init__(
         self,
-        vtestnet,  # vtestnet container
-        request,  # pytest session config
+        vtestnet: Container,  # vtestnet container
+        request: pytest.FixtureRequest,
         dockerctl: DockerCtl,
         docker_mounts: List[Mount]
     ):
@@ -101,9 +93,9 @@ class EOSIOTestSession:
         *args, **kwargs
     ):
         """Run command inside the virtual testnet docker container, warning:
-            its normal for blockchain interactions to timeout so by default
-            this method retries commands 3 times. ``retry=0`` should be passed
-            to avoid retry.
+        its normal for blockchain interactions to timeout so by default
+        this method retries commands 3 times. ``retry=0`` should be passed
+        to avoid retry.
         """
 
         for i in range(1, 2 + retry):
@@ -143,6 +135,8 @@ class EOSIOTestSession:
         return info['ExitCode'], out
 
     def get_manifest(self):
+        """Parse or return already parsed contract manifest.
+        """
         if self.manifest == {}:
             for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
                 contract_node = sub_manifest_path.parent
@@ -213,6 +207,8 @@ class EOSIOTestSession:
             f'test -f {work_dir}/CMakeLists.txt && echo True'
         ])
         if is_cmake == 'True\n':  #CMake
+            cxxflags = '\ '.join([f'-I{incl}' for incl in includes])
+            logging.info(f'\t\tcxxflags: {cxxflags}')
             cmd = [
                 'cmake',
                 f'-DSYS_CONTRACTS_DIR={self.sys_contracts_path}',
@@ -221,19 +217,17 @@ class EOSIOTestSession:
             ]
             logging.info(f'\t\t{" ".join(cmd)}')
             ec, _ = run(
-                cmd,
-                workdir=f'{work_dir}/build'
-            )
+                cmd, workdir=f'{work_dir}/build')
             assert ec == 0
 
-            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
-            logging.info(f'\t\tcxxflags: {cxxflags}')
             cmd = ['make', f'-j{psutil.cpu_count()}']
             logging.info(f'\t\t{" ".join(cmd)}')
             ec, _ = run(
                 cmd,
                 workdir=f'{work_dir}/build',
-                environment={'CXXFLAGS': cxxflags}
+                environment={
+                    'CXXFLAGS': cxxflags
+                }
             )
             assert ec == 0
 
@@ -243,14 +237,13 @@ class EOSIOTestSession:
 
     def build_contracts(self, default_cdt='1.6.3'):
         """Build Contracts
-        link: https://developers.eos.io/welcome/latest/
-        getting-started/smart-contract-development/hello-world
+        link: https://developers.eos.io/welcome/latest/getting-started/smart-contract-development/hello-world
         """
 
         ec, out = self.run(
             ['sh', '-c', 'echo */include'],
             retry=0,
-            workdir=f'{SYS_CONTRACTS_ROOTDIR}/contracts'
+            workdir=f'{self.sys_contracts_path}/contracts'
         )
         assert ec == 0
 
@@ -259,7 +252,7 @@ class EOSIOTestSession:
             './include',
             '../include',
             *[
-                f'{SYS_CONTRACTS_ROOTDIR}/contracts/{path}'
+                f'{self.sys_contracts_path}/contracts/{path}'
                 for path in out.rstrip().split(' ')
             ]
         ]
@@ -273,7 +266,7 @@ class EOSIOTestSession:
         with ExitStack() as stack:
 
             for contract_name, config in manifest.items():
-                """Smart build system: only recompile contracts whose
+                """\"Smart\" build system: only recompile contracts whose
                 code as  changed, to do this we hash  every file that
                 we can find that is used in compilation, we order the
                 hash list and then use each hash to compute a  global
@@ -293,10 +286,6 @@ class EOSIOTestSession:
                 logging.info(f'prev hash: {prev_hash}')
                 logging.info(f'curr hash: {curr_hash}')
 
-                # Reopen to truncate contents
-                with open(binfo_path, 'w') as build_info: 
-                    build_info.write(curr_hash)
-
                 if (prev_hash != curr_hash) or self.force_build:
                     self.build_contract(
                         manifest[contract_name]['cdt'],
@@ -304,6 +293,10 @@ class EOSIOTestSession:
                         config['cdir'],
                         includes=include_dirs
                     )
+
+                    # write modified hash
+                    with open(binfo_path, 'w') as build_info: 
+                        build_info.write(curr_hash)
 
     def deploy_contract(
         self,
@@ -392,7 +385,7 @@ class EOSIOTestSession:
     def boot_sequence(self):
         # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
 
-        sys_contracts_mount = f'{SYS_CONTRACTS_ROOTDIR}/contracts'
+        sys_contracts_mount = f'{self.sys_contracts_path}/contracts'
 
         for name in [
             'eosio.bpay',
@@ -1002,7 +995,6 @@ class EOSIOTestSession:
             assert ec == 0
 
 
-SYS_CONTRACTS_ROOTDIR = '/usr/opt/telos.contracts'
 CONTRACTS_ROOTDIR = '/root/contracts'
 CUSTOM_INCLUDES_DIR = '/root/includes'
 
@@ -1023,11 +1015,7 @@ def eosio_testnet(request):
             f'{CUSTOM_INCLUDES_DIR}/{i}',
             str(Path(inc_dir).resolve()),
             'bind'
-        ) for i, inc_dir in enumerate(request.config.getoption('--include'))],
-        Mount(
-            SYS_CONTRACTS_ROOTDIR,
-            'pytest-eosiocdt.syscontracts'
-        )
+        ) for i, inc_dir in enumerate(request.config.getoption('--include'))]
     ]
 
     if dockerctl.client.info()['NCPU'] < 2:

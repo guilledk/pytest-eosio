@@ -120,8 +120,10 @@ class TelosDecide(SmartContract):
             voter,
             'voters'
         )
-        assert len(voter) == 1
-        return voter[0]
+        if len(voter) == 1:
+            return voter[0]
+        else:
+            return None
    
     def mint(
         self,
