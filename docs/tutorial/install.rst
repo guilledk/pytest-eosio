@@ -32,7 +32,7 @@ To install ``pyenv`` checkout this repo: `<https://github.com/pyenv/pyenv-instal
 Once ``pyenv`` is installed, run this series of commands to install an appropriate version::
 
     pyenv update
-    pyenv install 3.*.*  # 3.8+, probably works on 3.7 but not tested
+    pyenv install 3.*.*  # 3.9+
 
 Then you can create a ``python`` virtual environment local to a folder, based
 of a fresh install of a specific version::
