@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from pytest_eosiocdt import (
+from pytest_eosio import (
     random_string,
     random_token_symbol
 )

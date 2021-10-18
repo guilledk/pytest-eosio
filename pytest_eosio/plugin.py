@@ -168,7 +168,7 @@ class EOSIOTestSession:
         cdt = exit_stack.enter_context(
             get_container(
                 self.dockerctl,
-                'guilledk/pytest-eosiocdt',
+                'guilledk/pytest-eosio',
                 f'cdt-{cdt_v}',
                 mounts=self.docker_mounts
             )
@@ -1023,7 +1023,7 @@ def eosio_testnet(request):
    
     with get_container(
         dockerctl,
-        'guilledk/pytest-eosiocdt',
+        'guilledk/pytest-eosio',
         'vtestnet',
         mounts=docker_mounts,
         publish_all_ports=True

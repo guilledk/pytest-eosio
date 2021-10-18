@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from pytest_eosiocdt import random_token_symbol, string_to_name
+from pytest_eosio import random_token_symbol, string_to_name
 
 
 def test_multi_sig_contract(eosio_testnet):

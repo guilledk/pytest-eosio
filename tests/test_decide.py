@@ -4,11 +4,11 @@ import time
 
 from datetime import datetime, timedelta
 
-from pytest_eosiocdt.telos import (
+from pytest_eosio.telos import (
     telosdecide,
     init_telos_token
 )
-from pytest_eosiocdt.sugar import (
+from pytest_eosio.sugar import (
     eosio_format_date,
     eosio_parse_date,
     random_token_symbol,

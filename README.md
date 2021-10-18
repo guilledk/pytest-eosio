@@ -1,5 +1,5 @@
 
-# pytest-eosiocdt
+# pytest-eosio
 
 ### A pytest plugin for end-to-end testing EOSIO smart contracts
 
@@ -71,7 +71,7 @@ That suite includes contracts and tests for:
 
 2 - With ``python3`` installed, run:
 
-    pip install git+git://github.com/guilledk/pytest-eosiocdt.git
+    pip install git+git://github.com/guilledk/pytest-eosio.git
 
 ## Usage
 
@@ -86,11 +86,11 @@ Run tests:
 
 - docker build:
 
-    `docker build --tag guilledk/pytest-eosiocdt:  docker/`
+    `docker build --tag guilledk/pytest-eosio:  docker/`
 
 - docker push:
 
-    `docker push guilledk/pytest-eosiocdt:`
+    `docker push guilledk/pytest-eosio:`
 
 - docker stop all:
 
