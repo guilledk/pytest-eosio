@@ -5,3 +5,4 @@
 **/.pytest-eosiocdt
 **/build
 **/__pycache__
+docs/_build
