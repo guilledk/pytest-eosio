@@ -8,9 +8,8 @@ from contextlib import ExitStack
 
 
 _EXITSTACK = None
-_DOCKERCTL = None
-_VTESTNET = None
-_MOUNTS = None
+
+_SESSION_OBJ = None
 
 
 def get_exit_stack() -> ExitStack:
@@ -21,29 +20,12 @@ def get_exit_stack() -> ExitStack:
     return _EXITSTACK
 
 
-def set_dockerctl(dockerctl):
-    global _DOCKERCTL
-    _DOCKERCTL = dockerctl
-
-def get_dockerctl():
-    global _DOCKERCTL
-    return _DOCKERCTL
+def set_session(session_obj):
+    global _SESSION_OBJ
+    _SESSION_OBJ = session_obj
 
 
-def set_testnet(container):
-    global _VTESTNET
-    _VTESTNET = container
-
-def get_testnet():
-    global _VTESTNET
-    return _VTESTNET
-
-
-def set_mounts(mounts):
-    global _MOUNTS
-    _MOUNTS = mounts
-
-
-def get_mounts():
-    global _MOUNTS
-    return _MOUNTS
+def get_session():
+    global _SESSION_OBJ
+    return _SESSION_OBJ
+    

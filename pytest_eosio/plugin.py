@@ -20,6 +20,8 @@ import pytest
 import psutil
 import requests
 
+import _pytest
+
 from docker.types import Mount
 from docker.errors import DockerException
 from docker.models.containers import Container
@@ -38,15 +40,8 @@ from .sugar import (
 
 from .globals import (
     get_exit_stack,
-    
-    set_dockerctl,
-    get_dockerctl,
-
-    set_testnet,
-    get_testnet,
-
-    set_mounts,
-    get_mounts
+    set_session,
+    get_session
 )
 
 
@@ -75,11 +70,11 @@ class EOSIOTestSession:
     def __init__(
         self,
         vtestnet: Container,  # vtestnet container
-        request: pytest.FixtureRequest,
+        config: _pytest.config.Config,
         dockerctl: DockerCtl,
         docker_mounts: List[Mount]
     ):
-        endpoint = request.config.getoption('--endpoint')
+        endpoint = config.getoption('--endpoint')
         if endpoint:
             self.endpoint = endpoint
         else:
@@ -88,9 +83,12 @@ class EOSIOTestSession:
 
             self.endpoint = f'http://localhost:{container_port}'
 
-        self.skip_build = request.config.getoption('--skip-build')
-        self.force_build = request.config.getoption('--force-build')
-        self.custom_includes = request.config.getoption('--include')
+        self.skip_build = config.getoption('--skip-build')
+        self.force_build = config.getoption('--force-build')
+        self.custom_includes = config.getoption('--include')
+
+        self.reporter = config.pluginmanager.get_plugin('terminalreporter')
+        self.capture_manager = config.pluginmanager.get_plugin('capturemanager')
 
         self.vtestnet = vtestnet
         self.dockerctl = dockerctl
@@ -227,6 +225,7 @@ class EOSIOTestSession:
         if is_cmake == 'True\n':  #CMake
             cxxflags = '\ '.join([f'-I{incl}' for incl in includes])
             logging.info(f'\t\tcxxflags: {cxxflags}')
+            self.reporter.write("\tcmake... ", flush=True)
             cmd = [
                 'cmake',
                 f'-DSYS_CONTRACTS_DIR={self.sys_contracts_path}',
@@ -237,9 +236,11 @@ class EOSIOTestSession:
             ec, _ = run(
                 cmd, workdir=f'{work_dir}/build')
             assert ec == 0
+            self.reporter.write(" done.\n", flush=True)
 
             cmd = ['make', f'-j{psutil.cpu_count()}']
             logging.info(f'\t\t{" ".join(cmd)}')
+            self.reporter.write("\tmake... ", flush=True)
             ec, _ = run(
                 cmd,
                 workdir=f'{work_dir}/build',
@@ -248,6 +249,7 @@ class EOSIOTestSession:
                 }
             )
             assert ec == 0
+            self.reporter.write(" done.\n", flush=True)
 
         else:
             raise FileNotFoundError(
@@ -282,39 +284,44 @@ class EOSIOTestSession:
         manifest = self.get_manifest() 
 
         with ExitStack() as stack:
+            with self.capture_manager.global_and_fixture_disabled():
+                for contract_name, config in manifest.items():
+                    """\"Smart\" build system: only recompile contracts whose
+                    code as  changed, to do this we hash  every file that
+                    we can find that is used in compilation, we order the
+                    hash list and then use each hash to compute a  global
+                    hash.
+                    """
+                    contract_node = Path(config['dir'])
+                    binfo_path = contract_node / '.binfo'
+                    try:
+                        with open(binfo_path, 'r') as build_info:
+                            prev_hash = build_info.read()
 
-            for contract_name, config in manifest.items():
-                """\"Smart\" build system: only recompile contracts whose
-                code as  changed, to do this we hash  every file that
-                we can find that is used in compilation, we order the
-                hash list and then use each hash to compute a  global
-                hash.
-                """
-                contract_node = Path(config['dir'])
-                binfo_path = contract_node / '.binfo'
-                try:
-                    with open(binfo_path, 'r') as build_info:
-                        prev_hash = build_info.read()
+                    except FileNotFoundError:
+                        prev_hash = None
 
-                except FileNotFoundError:
-                    prev_hash = None
+                    curr_hash = hash_dir(contract_node, includes=include_dirs)
+                    
+                    logging.info(f'prev hash: {prev_hash}')
+                    logging.info(f'curr hash: {curr_hash}')
+                    
+                    self.reporter.write(
+                        f"contract: {contract_name}, hashes: {prev_hash[:8]}, {curr_hash[:8]}\n",
+                        flush=True)
 
-                curr_hash = hash_dir(contract_node, includes=include_dirs)
-                
-                logging.info(f'prev hash: {prev_hash}')
-                logging.info(f'curr hash: {curr_hash}')
+                    if (prev_hash != curr_hash) or self.force_build:
+                        self.reporter.write("building...\n", flush=True)
+                        self.build_contract(
+                            manifest[contract_name]['cdt'],
+                            stack,
+                            config['cdir'],
+                            includes=include_dirs
+                        )
 
-                if (prev_hash != curr_hash) or self.force_build:
-                    self.build_contract(
-                        manifest[contract_name]['cdt'],
-                        stack,
-                        config['cdir'],
-                        includes=include_dirs
-                    )
-
-                    # write modified hash
-                    with open(binfo_path, 'w') as build_info: 
-                        build_info.write(curr_hash)
+                        # write modified hash
+                        with open(binfo_path, 'w') as build_info: 
+                            build_info.write(curr_hash)
 
     def deploy_contract(
         self,
@@ -326,8 +333,10 @@ class EOSIOTestSession:
         staked=True
     ):
         logging.info(f'contract {contract_name}:')
-
+        
         account_name = contract_name if not account_name else account_name
+
+        self.reporter.write(f"deploying {account_name}...", flush=True)
 
         if create_account:
             logging.info('\tcreate account...')
@@ -381,6 +390,7 @@ class EOSIOTestSession:
         logging.info(f'wasm path: {wasm_path}')
         logging.info(f'wasm: {wasm_file}')
         logging.info(f'abi: {abi_file}')
+        
         cmd = [
             'cleos', 'set', 'contract', account_name,
             str(wasm_path.parent),
@@ -395,6 +405,7 @@ class EOSIOTestSession:
 
         if ec == 0:
             logging.info('deployed')
+            self.reporter.write(f" done.\n", flush=True)
 
         else:
             raise AssertionError(f'Couldn\'t deploy {account_name} contract.')
@@ -1034,8 +1045,6 @@ def pytest_sessionstart(session):
             terminal_reporter.write(" error!\n", flush=True)
             pytest.exit("Is docker daemon running?")
 
-        set_dockerctl(dockerctl)
-
         terminal_reporter.write(" done.\n", flush=True)
     
         docker_mounts = [
@@ -1050,7 +1059,6 @@ def pytest_sessionstart(session):
                 'bind'
             ) for i, inc_dir in enumerate(session.config.getoption('--include'))]
         ]
-        set_mounts(docker_mounts)
 
         if dockerctl.client.info()['NCPU'] < 2:
             logging.warning('eosio-cpp needs at least 2 logical cores')
@@ -1066,30 +1074,33 @@ def pytest_sessionstart(session):
                 publish_all_ports=True
             )
         )
-        set_testnet(container)
 
         terminal_reporter.write(" done.\n", flush=True)
 
+        session = get_exit_stack().enter_context(
+            EOSIOTestSession(
+                container,
+                session.config,
+                dockerctl,
+                docker_mounts
+            )
+        )
+        set_session(session)
+
 
 @pytest.fixture(scope='session')    
-def eosio_testnet(request):
-    with EOSIOTestSession(
-        get_testnet(),
-        request,
-        get_dockerctl(),
-        get_mounts()
-    ) as session:
-        yield session
+def eosio_testnet():
+    yield get_session() 
 
 
 def pytest_sessionfinish(session, exitstatus):
 
     terminal_reporter = session.config.pluginmanager.get_plugin('terminalreporter')
     capture_manager = session.config.pluginmanager.get_plugin('capturemanager')
+    session_obj = get_session()
     with capture_manager.global_and_fixture_disabled():
-        vtestnet = get_testnet()
-        if vtestnet and session.config.getoption('--keep-alive'):
-            ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
+        if session_obj and session.config.getoption('--keep-alive'):
+            ports = waitfor(session_obj.vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
             container_port = ports[0]['HostPort']
             endpoint = f'http://localhost:{container_port}'
 

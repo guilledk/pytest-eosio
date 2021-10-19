@@ -3,7 +3,7 @@
 
 ### A pytest plugin for end-to-end testing EOSIO smart contracts
 
-![plugin running](https://i.imgur.com/k3TYoBQ.png)
+![plugin running](https://i.imgur.com/MhTcpnE.png)
 
 ## What it does for you
 
