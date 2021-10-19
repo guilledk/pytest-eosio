@@ -14,12 +14,14 @@ from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
 from contextlib import ExitStack
 
+import sys
 import toml
 import pytest
 import psutil
 import requests
 
 from docker.types import Mount
+from docker.errors import DockerException
 from docker.models.containers import Container
 
 from pytest_dockerctl import DockerCtl, waitfor
@@ -32,6 +34,19 @@ from .sugar import (
     get_container,
     Asset,
     Symbol
+)
+
+from .globals import (
+    get_exit_stack,
+    
+    set_dockerctl,
+    get_dockerctl,
+
+    set_testnet,
+    get_testnet,
+
+    set_mounts,
+    get_mounts
 )
 
 
@@ -1001,45 +1016,6 @@ class EOSIOTestSession:
 CONTRACTS_ROOTDIR = '/root/contracts'
 CUSTOM_INCLUDES_DIR = '/root/includes'
 
-_EXITSTACK = None
-_DOCKERCTL = None
-_VTESTNET = None
-_MOUNTS = None
-
-def get_exit_stack() -> ExitStack:
-    global _EXITSTACK
-    if _EXITSTACK == None:
-        _EXITSTACK = ExitStack()
-
-    return _EXITSTACK
-
-
-def set_dockerctl(dockerctl):
-    global _DOCKERCTL
-    _DOCKERCTL = dockerctl
-
-def get_dockerctl():
-    global _DOCKERCTL
-    return _DOCKERCTL
-
-
-def set_testnet(container):
-    global _VTESTNET
-    _VTESTNET = container
-
-def get_testnet():
-    global _VTESTNET
-    return _VTESTNET
-
-
-def set_mounts(mounts):
-    global _MOUNTS
-    _MOUNTS = mounts
-
-
-def get_mounts():
-    global _MOUNTS
-    return _MOUNTS
 
 
 def pytest_sessionstart(session):
@@ -1050,8 +1026,14 @@ def pytest_sessionstart(session):
 
         terminal_reporter.write("connecting to docker daemon...", flush=True)
 
-        dockerctl = DockerCtl(session.config.option.dockerurl)
-        dockerctl.client.ping()
+        try:
+            dockerctl = DockerCtl(session.config.option.dockerurl)
+            dockerctl.client.ping()
+
+        except DockerException:
+            terminal_reporter.write(" error!\n", flush=True)
+            pytest.exit("Is docker daemon running?")
+
         set_dockerctl(dockerctl)
 
         terminal_reporter.write(" done.\n", flush=True)
