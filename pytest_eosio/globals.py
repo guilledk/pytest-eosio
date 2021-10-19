@@ -3,6 +3,10 @@
 from contextlib import ExitStack
 
 
+"""This globals are needed to keep some values in between pytest hook calls
+"""
+
+
 _EXITSTACK = None
 _DOCKERCTL = None
 _VTESTNET = None

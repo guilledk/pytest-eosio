@@ -1104,7 +1104,7 @@ def pytest_sessionfinish(session, exitstatus):
             except KeyboardInterrupt:
                 pass
 
-        terminal_reporter.write("\nstopping chain...", flush=True)
+        terminal_reporter.write("\n\nstopping chain...", flush=True)
 
         get_exit_stack().pop_all().close()
 

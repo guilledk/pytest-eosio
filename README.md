@@ -3,6 +3,8 @@
 
 ### A pytest plugin for end-to-end testing EOSIO smart contracts
 
+![plugin running](https://i.imgur.com/k3TYoBQ.png)
+
 ## What it does for you
 
 - Compile contracts (detects deltas on source files)
