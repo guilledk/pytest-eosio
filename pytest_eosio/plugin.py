@@ -48,6 +48,9 @@ def pytest_addoption(parser):
     parser.addoption(
         '-I', '--include', action='append', default=[], help='add custom include location for contract build'
     )
+    parser.addoption(
+        '--keep-alive', action='store_true', default=False, help='after running test session, keep blockchain open'
+    )
 
 
 class EOSIOTestSession:
@@ -998,35 +1001,129 @@ class EOSIOTestSession:
 CONTRACTS_ROOTDIR = '/root/contracts'
 CUSTOM_INCLUDES_DIR = '/root/includes'
 
+_EXITSTACK = None
+_DOCKERCTL = None
+_VTESTNET = None
+_MOUNTS = None
 
-@pytest.fixture(scope='session')
-def eosio_testnet(request):
+def get_exit_stack() -> ExitStack:
+    global _EXITSTACK
+    if _EXITSTACK == None:
+        _EXITSTACK = ExitStack()
 
-    dockerctl = DockerCtl(request.config.option.dockerurl)
-    dockerctl.client.ping()
+    return _EXITSTACK
+
+
+def set_dockerctl(dockerctl):
+    global _DOCKERCTL
+    _DOCKERCTL = dockerctl
+
+def get_dockerctl():
+    global _DOCKERCTL
+    return _DOCKERCTL
+
+
+def set_testnet(container):
+    global _VTESTNET
+    _VTESTNET = container
+
+def get_testnet():
+    global _VTESTNET
+    return _VTESTNET
+
+
+def set_mounts(mounts):
+    global _MOUNTS
+    _MOUNTS = mounts
+
+
+def get_mounts():
+    global _MOUNTS
+    return _MOUNTS
+
+
+def pytest_sessionstart(session):
+
+    terminal_reporter = session.config.pluginmanager.get_plugin('terminalreporter')
+    capture_manager = session.config.pluginmanager.get_plugin('capturemanager')
+    with capture_manager.global_and_fixture_disabled():
+
+        terminal_reporter.write("connecting to docker daemon...", flush=True)
+
+        dockerctl = DockerCtl(session.config.option.dockerurl)
+        dockerctl.client.ping()
+        set_dockerctl(dockerctl)
+
+        terminal_reporter.write(" done.\n", flush=True)
     
-    docker_mounts = [
-        Mount(
-            CONTRACTS_ROOTDIR,  # target
-            str(Path('contracts').resolve()),  # source
-            'bind'
-        ),
-        *[Mount(
-            f'{CUSTOM_INCLUDES_DIR}/{i}',
-            str(Path(inc_dir).resolve()),
-            'bind'
-        ) for i, inc_dir in enumerate(request.config.getoption('--include'))]
-    ]
+        docker_mounts = [
+            Mount(
+                CONTRACTS_ROOTDIR,  # target
+                str(Path('contracts').resolve()),  # source
+                'bind'
+            ),
+            *[Mount(
+                f'{CUSTOM_INCLUDES_DIR}/{i}',
+                str(Path(inc_dir).resolve()),
+                'bind'
+            ) for i, inc_dir in enumerate(session.config.getoption('--include'))]
+        ]
+        set_mounts(docker_mounts)
 
-    if dockerctl.client.info()['NCPU'] < 2:
-        logging.warning('eosio-cpp needs at least 2 logical cores')
-   
-    with get_container(
-        dockerctl,
-        'guilledk/pytest-eosio',
-        'vtestnet',
-        mounts=docker_mounts,
-        publish_all_ports=True
-    ) as container:
-        with EOSIOTestSession(container, request, dockerctl, docker_mounts) as session:
-            yield session
+        if dockerctl.client.info()['NCPU'] < 2:
+            logging.warning('eosio-cpp needs at least 2 logical cores')
+
+        terminal_reporter.write("launching virtual testnet...", flush=True)
+
+        container = get_exit_stack().enter_context(
+            get_container(
+                dockerctl,
+                'guilledk/pytest-eosio',
+                'vtestnet',
+                mounts=docker_mounts,
+                publish_all_ports=True
+            )
+        )
+        set_testnet(container)
+
+        terminal_reporter.write(" done.\n", flush=True)
+
+
+@pytest.fixture(scope='session')    
+def eosio_testnet(request):
+    with EOSIOTestSession(
+        get_testnet(),
+        request,
+        get_dockerctl(),
+        get_mounts()
+    ) as session:
+        yield session
+
+
+def pytest_sessionfinish(session, exitstatus):
+
+    terminal_reporter = session.config.pluginmanager.get_plugin('terminalreporter')
+    capture_manager = session.config.pluginmanager.get_plugin('capturemanager')
+    with capture_manager.global_and_fixture_disabled():
+        vtestnet = get_testnet()
+        if vtestnet and session.config.getoption('--keep-alive'):
+            ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
+            container_port = ports[0]['HostPort']
+            endpoint = f'http://localhost:{container_port}'
+
+            terminal_reporter.ensure_newline()
+            terminal_reporter.write(f"\nAccess the running testnet at {endpoint}\n")
+            terminal_reporter.write("--keep-alive PRESENT, awaiting Ctrl+C...", flush=True)
+
+            try:
+                while True:
+                    time.sleep(100000)
+
+            except KeyboardInterrupt:
+                pass
+
+        terminal_reporter.write("\nstopping chain...", flush=True)
+
+        get_exit_stack().pop_all().close()
+
+        terminal_reporter.write(" done.", flush=True)
