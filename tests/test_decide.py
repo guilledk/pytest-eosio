@@ -365,3 +365,90 @@ def test_decide_cast_vote(telosdecide):
 
     assert ballot['total_voters'] == total_voters
 
+
+def test_decide_parallel_cast_vote(telosdecide):
+    init_telos_token(telosdecide.testnet)
+    fonds = f'{10000:.4f} TLOS'
+    telosdecide.testnet.transfer_token(
+        'eosio.token',
+        'eosio',
+        fonds,
+        ''
+    )
+
+    telosdecide.init('2.0.0')
+    telosdecide.deposit('eosio', fonds)
+    
+    sym = random_token_symbol()
+    treasury_sym = f'4,{sym}'
+    vote_supply = f'{10000000000:.4f} {sym}'
+    telosdecide.new_treasury(
+        'eosio',
+        vote_supply,
+        'public'
+    )
+
+    total_voters = 3
+    voters = [
+        telosdecide.testnet.new_account()
+        for x in range(total_voters)
+    ]
+    telosdecide.register_voter('eosio', treasury_sym, 'eosio')
+    minted = f'{100:.4f} {sym}'
+
+    # parallel regvoter
+    results = telosdecide.testnet.parallel_push_action((
+        (telosdecide.contract_name for _ in range(total_voters)),
+        ('regvoter' for _ in range(total_voters)),
+        ([voter, treasury_sym, voter] for voter in voters),
+        (f'{voter}@active' for voter in voters)
+    ))
+    for ec, _ in results:
+        assert ec == 0
+
+    for voter in voters:
+        telosdecide.mint(voter, minted, 'vote!')
+
+    ballot_name = random_eosio_name()
+    category = 'poll'
+    options = ['yes', 'no', 'abstain']
+    telosdecide.new_ballot(
+        ballot_name,
+        category,
+        'eosio',
+        treasury_sym,
+        '1token1vote',
+        options 
+    )
+
+    begin_time = datetime.utcnow()
+    end_time = begin_time + timedelta(seconds=4)
+    telosdecide.open_voting(
+        ballot_name,
+        eosio_format_date(end_time)
+    )
+
+    start = time.time()
+
+    for i, voter in enumerate(voters):
+        ec, _ = telosdecide.cast_vote(
+            voter,
+            ballot_name,
+            [options[i]]
+        )
+        assert ec == 0
+
+    end = time.time()
+
+    time.sleep(5 - (end - start))
+
+    ec, _ = telosdecide.close_voting(ballot_name)
+
+    ballot = telosdecide.get_ballot(ballot_name)
+
+    assert ballot is not None
+    
+    for option in ballot['options']:
+        assert option['value'] == minted
+
+    assert ballot['total_voters'] == total_voters

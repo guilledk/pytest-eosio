@@ -107,7 +107,7 @@ class EOSIOTestSession:
         cmd: List[str],
         retry: int = 3,
         *args, **kwargs
-    ):
+    ) -> Tuple[int, str]:
         """Run command inside the virtual testnet docker container, warning:
         its normal for blockchain interactions to timeout so by default
         this method retries commands 3 times. ``retry=0`` should be passed
@@ -127,19 +127,19 @@ class EOSIOTestSession:
         self,
         cmd: List[str],
         **kwargs
-    ):
+    ) -> Tuple[str, Iterator[str]]:
         """Begin running the command inside the virtual container, return the
         internal docker process id, and a stream for the standard output.
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
-        exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
-        return exec_id, exec_run
+        exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+        return exec_id['Id'], exec_stream
 
     def wait_process(
         self,
-        exec_id,
-        exec_stream
-    ):
+        exec_id: str,
+        exec_stream: Iterator[str]
+    ) -> Tuple[int, str]:
         """Collect output from process stream, then inspect process and return
         exitcode.
         """
@@ -150,8 +150,15 @@ class EOSIOTestSession:
         info = self.dockerctl.client.api.exec_inspect(exec_id)
         return info['ExitCode'], out
 
-    def get_manifest(self):
+    def get_manifest(self) -> Dict[str, str]:
         """Parse or return already parsed contract manifest.
+
+        Will search on all subfolders inside ``contracts/`` dir for manifest
+        files with toml format, with the name:
+
+            manifest.toml
+
+        And will stich them up in one big dict.
         """
         if self.manifest == {}:
             for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
@@ -175,10 +182,10 @@ class EOSIOTestSession:
 
     def build_contract(
         self,
-        cdt_v,
-        exit_stack,
-        work_dir,
-        includes=[]
+        cdt_v: str,
+        exit_stack: ExitStack,
+        work_dir: str,
+        includes: List[str] = []
     ):
 
         cdt = exit_stack.enter_context(
@@ -190,7 +197,7 @@ class EOSIOTestSession:
             )
         )
 
-        def run(cmd, **kwargs):
+        def run(cmd, **kwargs) -> Tuple[int, str]:
             exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
             exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
             out = ''
@@ -255,7 +262,10 @@ class EOSIOTestSession:
             raise FileNotFoundError(
                 "Expected CMakeLists.txt file in the contract directory.")
 
-    def build_contracts(self, default_cdt='1.6.3'):
+    def build_contracts(
+        self,
+        default_cdt: str = '1.6.3'
+    ):
         """Build Contracts
         link: https://developers.eos.io/welcome/latest/getting-started/smart-contract-development/hello-world
         """
@@ -325,12 +335,12 @@ class EOSIOTestSession:
 
     def deploy_contract(
         self,
-        contract_name,
-        build_dir,
-        privileged=False,
-        account_name=None,
-        create_account=True,
-        staked=True
+        contract_name: str,
+        build_dir: str,
+        privileged: bool = False,
+        account_name: Optional[str] = None,
+        create_account: bool = True,
+        staked: bool = True
     ):
         logging.info(f'contract {contract_name}:')
         
@@ -412,7 +422,39 @@ class EOSIOTestSession:
 
 
     def boot_sequence(self):
-        # https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
+        """Perform enterprise operating system bios sequence acording to:
+
+            https://developers.eos.io/welcome/latest/tutorials/bios-boot-sequence
+
+        This includes:
+
+        1) Creating the following accounts:
+        
+        ``
+            eosio.bpay
+            eosio.names
+            eosio.ram
+            eosio.ramfee
+            eosio.saving
+            eosio.stake
+            eosio.vpay
+            eosio.rex 
+        ``
+
+        2) Deploy the following contracts that come in vtestnet image:
+
+            ``eosio.token``, ``eosio.msig``, ``eosio.wrap``
+
+        3) Initialize the ``SYS`` token.
+        4) Activate v1 feature ``PREACTIVATE_FEATURE``.
+        5) Deploy ``eosio.system`` to ``eosio`` account.
+        6) Activate v2 features ``ONLY_BILL_FIRST_AUTHORIZER`` and
+        ``RAM_RESTRICTIONS``.
+        7) Set ``eosio.msig`` account as privileged in order to delegate
+        permissions.
+        8) System init.
+        9) Parse contract manifest and deploy user contracts.
+        """
 
         sys_contracts_mount = f'{self.sys_contracts_path}/contracts'
 
@@ -483,7 +525,9 @@ class EOSIOTestSession:
             self.deploy_contract(
                 contract_name, config['cdir'], account_name=acc_name)
 
-    def create_key_pair(self):
+    def create_key_pair(self) -> Tuple[str, str]:
+        """Generate a new EOSIO key pair.
+        """
         ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
         assert ec == 0
         assert ('Private key' in out) and ('Public key' in out)
@@ -491,7 +535,10 @@ class EOSIOTestSession:
         logging.info('created key pair')
         return lines[0].split(' ')[2].rstrip(), lines[1].split(' ')[2].rstrip()
 
-    def create_key_pairs(self, n: int):
+    def create_key_pairs(self, n: int) -> List[Tuple[str, str]]:
+        """Generate ``n`` EOSIO key pairs, faster than calling
+        ``create_key_pair`` on a loop.
+        """
         procs = [
             self.open_process(['cleos', 'create', 'key', '--to-console'])
             for _ in range(n)
@@ -511,6 +558,8 @@ class EOSIOTestSession:
         return keys
 
     def import_key(self, private_key: str):
+        """Import a private key into wallet inside testnet container.
+        """
         ec, out = self.run(
             ['cleos', 'wallet', 'import', '--private-key', private_key]
         )
@@ -518,6 +567,9 @@ class EOSIOTestSession:
         logging.info('key imported')
 
     def import_keys(self, private_keys: List[str]):
+        """Import ``n`` private keys into wallet inside testnet container.
+        Faster than calling ``import_key`` on a loop.
+        """
         procs = [
             self.open_process(
                 ['cleos', 'wallet', 'import', '--private-key', private_key])
@@ -581,7 +633,13 @@ class EOSIOTestSession:
         self.import_key('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3')
         logging.info('imported dev key')
 
-    def get_feature_digest(self, feature_name):
+    def get_feature_digest(self, feature_name: str) -> str:
+        """Given a feature name, query the v1 API endpoint:
+
+            ``get_supported_protocol_features``
+
+        to retrieve hash digest.
+        """
         r = requests.post(
             f'{self.endpoint}/v1/producer/get_supported_protocol_features',
             json={}
@@ -596,7 +654,10 @@ class EOSIOTestSession:
         logging.info(f'{feature_name} digest: {digest}')
         return digest
 
-    def activate_feature_v1(self, feature_name):
+    def activate_feature_v1(self, feature_name: str):
+        """Given a v1 feature name, activate it.
+        """
+
         digest = self.get_feature_digest(feature_name)
         logging.info(f'activating {feature_name}...')
         r = requests.post(
@@ -613,7 +674,10 @@ class EOSIOTestSession:
 
         logging.info(f'{digest} active.')
 
-    def activate_feature(self, feature_name):
+    def activate_feature(self, feature_name: str):
+        """Given a v2 feature name, activate it.
+        """
+
         logging.info(f'activating {feature_name}...')
         digest = self.get_feature_digest(feature_name)
         ec, _ = self.push_action(
@@ -624,6 +688,7 @@ class EOSIOTestSession:
         assert ec == 0
         logging.info(f'{digest} active.')
 
+    # python context manager proto 
     def __enter__(self):
         self.setup_wallet()
 
@@ -643,8 +708,21 @@ class EOSIOTestSession:
         action: str,
         args: List[str],
         permissions: str,
-        retry=3
-    ):
+        retry: int = 3
+    ) -> Tuple[int, Union[Dict[str, str], str]]:
+        """Execute an action defined in a given contract, in case of failure retry.
+
+        :param contract: Contract were action is defined.
+        :param action: Name of the action to execute.
+        :param args: List of action arguments.
+        :param permissions: Authority with which to sign this transaction.
+        :param retry: Max amount of retries allowed, can be zero for no retries.
+
+        :return: Always returns a tuple with the exit code at the beggining and
+        depending if the transaction was exectued, either the resulting json dict,
+        or the full output including errors as a string at the end.
+        """
+
         args = [
             str(arg)
             if (
