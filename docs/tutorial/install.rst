@@ -47,4 +47,4 @@ Install package
 
 With our ``python`` environment properly setup run::
 
-    pip install git+git://github.com/guilledk/pytest-eosiocdt.git
+    pip install git+git://github.com/guilledk/pytest-eosio.git

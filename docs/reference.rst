@@ -3,5 +3,5 @@
 API Reference
 =============
 
-.. autoclass:: pytest_eosiocdt.EOSIOTestSession
+.. autoclass:: pytest_eosio.EOSIOTestSession
    :members:

@@ -1,7 +1,7 @@
 .. index
 
-pytest-eosiocdt documentation
-=============================
+pytest-eosio documentation
+==========================
 
 .. toctree::
     tutorial/install

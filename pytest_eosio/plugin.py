@@ -428,32 +428,29 @@ class EOSIOTestSession:
 
         This includes:
 
-        1) Creating the following accounts:
-        
-        ``
-            eosio.bpay
-            eosio.names
-            eosio.ram
-            eosio.ramfee
-            eosio.saving
-            eosio.stake
-            eosio.vpay
-            eosio.rex 
-        ``
+            1) Creating the following accounts:
+            
+                - ``eosio.bpay``
+                - ``eosio.names``
+                - ``eosio.ram``
+                - ``eosio.ramfee``
+                - ``eosio.saving``
+                - ``eosio.stake``
+                - ``eosio.vpay``
+                - ``eosio.rex``
 
-        2) Deploy the following contracts that come in vtestnet image:
+            2) Deploy the following contracts that come in vtestnet image:
 
-            ``eosio.token``, ``eosio.msig``, ``eosio.wrap``
+                ``eosio.token``, ``eosio.msig``, ``eosio.wrap``
 
-        3) Initialize the ``SYS`` token.
-        4) Activate v1 feature ``PREACTIVATE_FEATURE``.
-        5) Deploy ``eosio.system`` to ``eosio`` account.
-        6) Activate v2 features ``ONLY_BILL_FIRST_AUTHORIZER`` and
-        ``RAM_RESTRICTIONS``.
-        7) Set ``eosio.msig`` account as privileged in order to delegate
-        permissions.
-        8) System init.
-        9) Parse contract manifest and deploy user contracts.
+            3) Initialize the ``SYS`` token.
+            4) Activate v1 feature ``PREACTIVATE_FEATURE``.
+            5) Deploy ``eosio.system`` to ``eosio`` account.
+            6) Activate v2 features ``ONLY_BILL_FIRST_AUTHORIZER`` and ``RAM_RESTRICTIONS``.
+            7) Set ``eosio.msig`` account as privileged in order to delegate permissions.
+            8) System init.
+            9) Parse contract manifest and deploy user contracts.
+
         """
 
         sys_contracts_mount = f'{self.sys_contracts_path}/contracts'
@@ -537,7 +534,7 @@ class EOSIOTestSession:
 
     def create_key_pairs(self, n: int) -> List[Tuple[str, str]]:
         """Generate ``n`` EOSIO key pairs, faster than calling
-        ``create_key_pair`` on a loop.
+        :func:`~pytest_eosio.EOSIOTestSession.create_key_pair` on a loop.
         """
         procs = [
             self.open_process(['cleos', 'create', 'key', '--to-console'])
@@ -567,8 +564,8 @@ class EOSIOTestSession:
         logging.info('key imported')
 
     def import_keys(self, private_keys: List[str]):
-        """Import ``n`` private keys into wallet inside testnet container.
-        Faster than calling ``import_key`` on a loop.
+        """Import a list of private keys into wallet inside testnet container.
+        Faster than calling :func:`~pytest_eosio.EOSIOTestSession.import_key` on a loop.
         """
         procs = [
             self.open_process(
@@ -719,8 +716,8 @@ class EOSIOTestSession:
         :param retry: Max amount of retries allowed, can be zero for no retries.
 
         :return: Always returns a tuple with the exit code at the beggining and
-        depending if the transaction was exectued, either the resulting json dict,
-        or the full output including errors as a string at the end.
+            depending if the transaction was exectued, either the resulting json dict,
+            or the full output including errors as a string at the end.
         """
 
         args = [

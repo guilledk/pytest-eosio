@@ -1,6 +1,6 @@
 import sphinx_rtd_theme
 
-project = 'pytest-eosiocdt'
+project = 'pytest-eosio'
 copyright = '2021, Guillermo Rodriguez'
 author = 'Guillermo Rodriguez'
 
@@ -21,3 +21,5 @@ html_theme_options = {
     'navigation_depth': 4,
     'titles_only': False
 }
+
+autodoc_member_order = 'bysource'
