@@ -7,12 +7,15 @@ author = 'Guillermo Rodriguez'
 
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx_rtd_theme'
+    'sphinx_rtd_theme',
+    'sphinx_rtd_dark_mode'
 ]
 
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 html_theme = 'sphinx_rtd_theme'
+
+default_dark_mode = False
 
 html_theme_options = {
     'display_version': True,

@@ -108,14 +108,25 @@ class EOSIOTestSession:
         retry: int = 3,
         *args, **kwargs
     ) -> Tuple[int, str]:
-        """Run command inside the virtual testnet docker container, warning:
-        its normal for blockchain interactions to timeout so by default
-        this method retries commands 3 times. ``retry=0`` should be passed
-        to avoid retry.
+        """Run command inside the virtual testnet docker container.
+
+        :param cmd: Command and parameters separated in chunks in a list.
+        :param retry: It's normal for blockchain interactions to timeout so by default
+            this method retries commands 3 times. ``retry=0`` should be passed
+            to avoid retry.
+        :param args: This method calls ``container.exec_run`` docker APIs under the
+            hood so you can pass extra arguments to it according to this (`docs
+            <https://docker-py.readthedocs.io/en/stable/containers.html#docker.m
+            odels.containers.Container.exec_run>`_).
+        :param kwargs: Same as ``args`` but for keyword arguments.
+
+        :return: A tuple with the process exitcode and output.
+        :rtype: Tuple[int, str]
         """
 
         for i in range(1, 2 + retry):
-            ec, out = self.vtestnet.exec_run(cmd, *args, **kwargs)
+            ec, out = self.vtestnet.exec_run(
+                [str(chunk) for chunk in cmd], *args, **kwargs)
             if ec == 0:
                 break
 
@@ -130,6 +141,17 @@ class EOSIOTestSession:
     ) -> Tuple[str, Iterator[str]]:
         """Begin running the command inside the virtual container, return the
         internal docker process id, and a stream for the standard output.
+
+        :param cmd: List of individual string forming the command to execute in
+            the testnet container shell.
+        :param kwargs: A variable number of key word arguments can be
+            provided, as this function uses `exec_create & exec_start docker APIs
+            <https://docker-py.readthedocs.io/en/stable/api.html#module-dock
+            er.api.exec_api>`_.
+
+        :return: A tuple with the process execution id and the output stream to
+            be consumed.
+        :rtype: Tuple[str, Iterator[str]]
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
         exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
@@ -142,6 +164,14 @@ class EOSIOTestSession:
     ) -> Tuple[int, str]:
         """Collect output from process stream, then inspect process and return
         exitcode.
+
+        Normaly used with :func:`~pytest_eosio.EOSIOTestSession.open_process`
+
+        :param exec_id: Process execution id provided by docker engine.
+        :param exec_stream: Process output stream to be consumed.
+
+        :return: Exitcode and process output.
+        :rtype: Tuple[int, str]
         """
         out = ''
         for chunk in exec_stream:
@@ -156,9 +186,12 @@ class EOSIOTestSession:
         Will search on all subfolders inside ``contracts/`` dir for manifest
         files with toml format, with the name:
 
-            manifest.toml
+            ``manifest.toml``
 
         And will stich them up in one big dict.
+
+        :return: A dictionary with contract account and source information.
+        :rtype: Dict[str, str]
         """
         if self.manifest == {}:
             for sub_manifest_path in Path('contracts').glob('**/manifest.toml'):
@@ -187,6 +220,15 @@ class EOSIOTestSession:
         work_dir: str,
         includes: List[str] = []
     ):
+        """Build an individual contract from a cmake project directory using a
+        specific container.
+
+        :param cdt_v: A string with the contract development kit version to use.
+        :param exit_stack: The exit stack under which all builds are happening.
+        :param work_dir: A string with the path to the project source directory.
+        :param includes: A list of additional include paths to set in ``CXXFLAGS``
+            environment variable.
+        """
 
         cdt = exit_stack.enter_context(
             get_container(
@@ -266,8 +308,14 @@ class EOSIOTestSession:
         self,
         default_cdt: str = '1.6.3'
     ):
-        """Build Contracts
-        link: https://developers.eos.io/welcome/latest/getting-started/smart-contract-development/hello-world
+        """Build contracts in project folder.
+
+        \"Smart\" build system: only recompile contracts whose code as  changed,
+        to do this we hash  every file that we can find that is used in
+        compilation, we order the hash list and then use each hash to compute a
+        global hash.
+        
+        :param default_cdt: Default contract development toolkit version.
         """
 
         ec, out = self.run(
@@ -296,12 +344,6 @@ class EOSIOTestSession:
         with ExitStack() as stack:
             with self.capture_manager.global_and_fixture_disabled():
                 for contract_name, config in manifest.items():
-                    """\"Smart\" build system: only recompile contracts whose
-                    code as  changed, to do this we hash  every file that
-                    we can find that is used in compilation, we order the
-                    hash list and then use each hash to compute a  global
-                    hash.
-                    """
                     contract_node = Path(config['dir'])
                     binfo_path = contract_node / '.binfo'
                     try:
@@ -342,6 +384,19 @@ class EOSIOTestSession:
         create_account: bool = True,
         staked: bool = True
     ):
+        """Deploy a built contract to an already.
+
+        :param contract_name: Name of contract wasm file. 
+        :param build_dir: Path to the directory the wasm and abi files are
+            located. Fuzzy searches all subdirectories for the .wasm and then
+            picks the one most similar to ``contract_name``, asumes .abi has
+            the same name and is in same directory.
+        :param privileged: ``True`` if contract should be privileged (system
+            contracts).
+        :param account_name: Name of the target account of the deployment.
+        :param create_account: ``True`` if target account should be created.
+        :param staked: ``True`` if this account should use RAM & NET resources.
+        """
         logging.info(f'contract {contract_name}:')
         
         account_name = contract_name if not account_name else account_name
@@ -524,6 +579,9 @@ class EOSIOTestSession:
 
     def create_key_pair(self) -> Tuple[str, str]:
         """Generate a new EOSIO key pair.
+
+        :return: Public and private key.
+        :rtype: Tuple[str, str]
         """
         ec, out = self.run(['cleos', 'create', 'key', '--to-console'])
         assert ec == 0
@@ -535,6 +593,9 @@ class EOSIOTestSession:
     def create_key_pairs(self, n: int) -> List[Tuple[str, str]]:
         """Generate ``n`` EOSIO key pairs, faster than calling
         :func:`~pytest_eosio.EOSIOTestSession.create_key_pair` on a loop.
+
+        :return: List of key pairs with a length of ``n``.
+        :rtype: List[Tuple[str, str]]
         """
         procs = [
             self.open_process(['cleos', 'create', 'key', '--to-console'])
@@ -582,9 +643,8 @@ class EOSIOTestSession:
         logging.info(f'imported {len(private_keys)} keys')
 
     def setup_wallet(self):
-        """Create Development Wallet
-        link: https://docs.telos.net/developers/platform/
-        development-environment/create-development-wallet
+        """Setup wallet acording to `telos docs <https://docs.telos.net/develope
+        rs/platform/development-environment/create-development-wallet>`_.
         """
 
         # Step 1: Create a Wallet
@@ -631,11 +691,14 @@ class EOSIOTestSession:
         logging.info('imported dev key')
 
     def get_feature_digest(self, feature_name: str) -> str:
-        """Given a feature name, query the v1 API endpoint:
-
-            ``get_supported_protocol_features``
+        """Given a feature name, query the v1 API endpoint: 
+        
+            ``/v1/producer/get_supported_protocol_features``
 
         to retrieve hash digest.
+
+        :return: Feature hash digest.
+        :rtype: str
         """
         r = requests.post(
             f'{self.endpoint}/v1/producer/get_supported_protocol_features',
@@ -718,6 +781,7 @@ class EOSIOTestSession:
         :return: Always returns a tuple with the exit code at the beggining and
             depending if the transaction was exectued, either the resulting json dict,
             or the full output including errors as a string at the end.
+        :rtype: Tuple[int, Union[Dict[str, str], str]]
         """
 
         args = [
@@ -753,7 +817,30 @@ class EOSIOTestSession:
             Iterator[List],  # params
             Iterator[str]    # permissions
         ]
-    ):
+    ) -> List[Tuple[int, Union[Dict[str, str], str]]]:
+        """Push several actions in parallel and collect their results. 
+
+        Example code:
+
+        .. code-block:: python
+
+            results = eosio_testnet.parallel_push_action((
+                (contract for contract in contract_names),
+                (action for action in action_names),
+                (params for params in param_lists),
+                (f'{auth}@active' for auth in authorities)
+            ))
+            for ec, _ in results:
+                assert ec == 0
+
+        :param actions: A tuple of four iterators, each iterator when consumed
+            produces one of the following attriubutes:
+                
+            ``contract name``, ``action name``, ``arguments list`` and ``permissions``
+
+        :return: A list the results for each action execution.
+        :rtype: List[Tuple[int, Union[Dict[str, str], str]]]
+        """
         procs = [
             self.open_process([
                 'cleos', 'push', 'action', contract, action,
@@ -770,7 +857,17 @@ class EOSIOTestSession:
         owner: str,
         name: str,
         key: Optional[str] = None,
-    ):
+    ) -> Tuple[int, str]:
+        """Create an unstaked eosio account, usualy used by system contracts.
+
+        :param owner: The system account that authorizes the creation of a new account.
+        :param name: The name of the new account conforming to account naming conventions.
+        :param key: The owner public key or permission level for the new account (optional).
+
+        :return: Exitcode and output.
+        :rtype: Tuple[int, str]
+        """
+
         if not key:
             key = self.dev_wallet_pkey
         ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
@@ -786,9 +883,24 @@ class EOSIOTestSession:
         cpu: str = '1000.0000 SYS',
         ram: int = 8192,
         key: Optional[str] = None
-    ):
-        if not key:
-            key = self.dev_wallet_pkey
+    ) -> Tuple[int, str]:
+        """Create a staked eosio account.
+
+        :param owner: The system account that authorizes the creation of a new
+            account.
+        :param name: The name of the new account conforming to account naming
+            conventions.
+        :param net: Amount of system tokens to stake to reserve network bandwith.
+        :param cpu: Amount of system tokens to stake to reserve cpu time.
+        :param ram: Amount of bytes of ram to buy for this account.
+        :param key: The owner public key or permission level for the new account
+            (optional).
+
+        :return: Exitcode and output.
+        :rtype: Tuple[int, str]
+        """
+
+        key = self.dev_wallet_pkey
         ec, out = self.run([
             'cleos',
             'system',
@@ -798,7 +910,7 @@ class EOSIOTestSession:
             name, key,
             '--stake-net', net,
             '--stake-cpu', cpu,
-            '--buy-ram-kbytes', str(ram)
+            '--buy-ram-kbytes', ram
         ])
         assert ec == 0
         logging.info(f'created staked account: {name}')
@@ -813,6 +925,24 @@ class EOSIOTestSession:
         cpu: str = '1000.0000 SYS',
         ram: int = 8192
     ):
+        """Same as :func:`~pytest_eosio.EOSIOTestSession.create_account_staked`,
+        but takes lists of names and keys, to create the accounts in parallel,
+        which is faster than calling :func:`~pytest_eosio.EOSIOTestSession.creat
+        e_account_staked` in a loop.
+
+        :param owner: The system account that authorizes the creation of a new
+            account.
+        :param names: List of names for the new accounts conforming to account naming
+            conventions.
+        :param keys: List of public keys or permission levels for the new accounts.
+        :param net: Amount of system tokens to stake to reserve network bandwith.
+        :param cpu: Amount of system tokens to stake to reserve cpu time.
+        :param ram: Amount of bytes of ram to buy for each account.
+
+        :return: Exitcode and output.
+        :rtype: Tuple[int, str]
+        """
+
         assert len(names) == len(keys)
         procs = [
             self.open_process([
@@ -824,7 +954,7 @@ class EOSIOTestSession:
                 name, key,
                 '--stake-net', net,
                 '--stake-cpu', cpu,
-                '--buy-ram-kbytes', str(ram)
+                '--buy-ram-kbytes', ram
             ]) for name, key in zip(names, keys)
         ]
         results = [
@@ -842,6 +972,19 @@ class EOSIOTestSession:
         table: str,
         *args
     ) -> List[Dict]:
+        """Get table rows from the blockchain.
+
+        :param account: Account name of contract were table is located.
+        :param scope: Table scope in EOSIO name format.
+        :param table: Table name.
+        :param args: Additional arguments to pass to ``cleos get table`` (`cleos 
+            docs <https://developers.eos.io/manuals/eos/latest/cleos/command-ref
+            erence/get/table>`_).
+
+        :return: List of rows matching query.
+        :rtype: List[Dict]
+        """
+
         done = False
         rows = []
         while not done:
@@ -860,15 +1003,47 @@ class EOSIOTestSession:
 
         return rows 
 
-    def get_info(self):
+    def get_info(self) -> Dict[str, Union[str, int]]:
+        """Get blockchain statistics.
+
+            - ``server_version``
+            - ``head_block_num``
+            - ``last_irreversible_block_num``
+            - ``head_block_id``
+            - ``head_block_time``
+            - ``head_block_producer``
+            - ``recent_slots``
+            - ``participation_rate``
+
+        :return: A dictionary with blockchain information.
+        :rtype: Dict[str, Union[str, int]]
+        """
+
         ec, out = self.run(['cleos', 'get', 'info'])
         assert ec == 0
         return json.loads(out)
 
-    def get_resources(self, account: str):
+    def get_resources(self, account: str) -> List[Dict]:
+        """Get account resources.
+
+        :param account: Name of account to query resources.
+
+        :return: A list with a single dictionary which contains, resource info.
+        :rtype: List[Dict]
+        """
+
         return self.get_table('eosio', account, 'userres')
 
-    def new_account(self, name: Optional[str] = None):
+    def new_account(self, name: Optional[str] = None) -> str:
+        """Create a new account with a random key and name, import the private
+        key into the wallet.
+
+        :param name: To set a specific name and not a random one.
+
+        :return: New account name.
+        :rtype: str
+        """
+
         if name:
             account_name = name
         else:
@@ -879,7 +1054,17 @@ class EOSIOTestSession:
         self.create_account_staked('eosio', account_name, key=public_key)
         return account_name
 
-    def new_accounts(self, n: int):
+    def new_accounts(self, n: int) -> List[str]:
+        """Same as :func:`~pytest_eosio.EOSIOTestSession.new_account` but to
+        create multiple accounts at the same time, faster than calling :func:`~p
+        ytest_eosio.EOSIOTestSession.new_account` on a loop.
+
+        :param n: Number of accounts to create.
+
+        :return: List of names of the new accounts.
+        :rtype: List[str]
+        """
+
         names = [random_eosio_name() for _ in range(n)]
         keys = self.create_key_pairs(n)
         self.import_keys([priv_key for priv_key, pub_key in keys])
@@ -889,10 +1074,21 @@ class EOSIOTestSession:
 
     def buy_ram_bytes(
         self,
-        payer,
-        amount,
-        receiver=None
-    ):
+        payer: str,
+        amount: int,
+        receiver: Optional[str] = None
+    ) -> Tuple[int, Union[Dict[str, str], str]]:
+        """Buy a number of RAM bytes for an account.
+
+        :param payer: Account to bill.
+        :param amount: Amount of RAM to buy in bytes.
+        :param receiver: In case its present buy RAM bytes for this account
+            instead of receiver.
+
+        :return: Exitcode and output of ``buyrambytes`` push action call.
+        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        """
+
         if not receiver:
             receiver = payer
 
@@ -902,20 +1098,39 @@ class EOSIOTestSession:
             f'{payer}@active'
         )
 
-    def wait_blocks(self, n: int):
+    def wait_blocks(self, n: int, sleep_time: float = 0.25):
+        """Busy wait till ``n`` amount of blocks are produced on the chain.
+
+        :param n: Number of blocks to wait.
+        :param sleep_time: Time to re-check chain.
+        """
         start = self.get_info()['head_block_num']
         while (info := self.get_info())['head_block_num'] - start < n:
-            time.sleep(0.1)
+            time.sleep(sleep_time)
 
     def multi_sig_propose(
         self,
-        proposer,
-        req_permissions: List[str],  # [ 'name1@active', 'name2@active' ]
+        proposer: str,
+        req_permissions: List[str],
         tx_petmissions: List[str],
-        contract,
-        action_name,
-        data
+        contract: str,
+        action_name: str,
+        data: Dict[str, str]
     ) -> str:
+        """Create a multi signature proposal with a random name.
+
+        :param proposer: Account to authorize the proposal.
+        :param req_permissions: List of permissions required to run proposed
+            transaction.
+        :param tx_permissions: List of permissions that will be applied to
+            transaction when executed.
+        :param contract: Contract were action is defined.
+        :param action_name: Action name.
+        :param data: Dictionary with transaction to execute with multi signature.
+
+        :return: New proposal name.
+        :rtype: str
+        """
 
         proposal_name = random_eosio_name()
         cmd = [
@@ -943,11 +1158,22 @@ class EOSIOTestSession:
 
     def multi_sig_approve(
         self,
-        proposer,
-        proposal_name,
-        permissions,
-        approver
-    ):
+        proposer: str,
+        proposal_name: str,
+        permissions: List[str],
+        approver: str
+    ) -> Tuple[int, Union[Dict[str, str], str]]:
+        """Approve a multisig proposal.
+
+        :param proposer: Account that created the proposal.
+        :param proposal_name: Name of the proposal.
+        :param permissions: List of permissions to append to proposal.
+        :param approver: Permissions to run this action.
+
+        :return: Exitcode and output of ``multisig.approve`` push action call.
+        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        """
+
         cmd = [
             'cleos',
             'multisig',
@@ -965,11 +1191,22 @@ class EOSIOTestSession:
 
     def multi_sig_exec(
         self,
-        proposer,
-        proposal_name,
-        permission,
-        wait=3
-    ):
+        proposer: str,
+        proposal_name: str,
+        permission: str,
+        wait: int = 3
+    ) -> Tuple[int, Union[Dict[str, str], str]]:
+        """Execute multi signature transaction proposal.
+
+        :param proposer: Account that created the proposal.
+        :param proposal_name: Name of the proposal.
+        :param permission: Permissions to run this action.
+        :param wait: Number of blocks to wait after executing.
+
+        :return: Exitcode and output of ``multisig.exec`` push action call.
+        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        """
+
         cmd = [
             'cleos',
             'multisig',
@@ -987,9 +1224,18 @@ class EOSIOTestSession:
 
     def multi_sig_review(
         self,
-        proposer,
-        proposal_name
-    ):
+        proposer: str,
+        proposal_name: str
+    ) -> Tuple[int, Union[Dict[str, str], str]]:
+        """Review a multisig proposal.
+
+        :param proposer: Account that created the proposal.
+        :param proposal_name: Name of the proposal.
+
+        :return: Exitcode and output of ``multisig.review`` push action call.
+        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        """
+
         cmd = [
             'cleos',
             'multisig',
@@ -1000,13 +1246,10 @@ class EOSIOTestSession:
         ec, out =  self.run(cmd)
         return ec, out
 
-    """
-    Token helpers
-    """
     def get_token_stats(
         self,
         sym: str,
-        token_contract='eosio.token'
+        token_contract: str = 'eosio.token'
     ) -> Dict:
         return self.get_table(
             token_contract,
