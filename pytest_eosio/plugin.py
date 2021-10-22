@@ -160,7 +160,7 @@ class EOSIOTestSession:
         :rtype: :ref:`typing_exe_stream`
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
-        exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+        exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, tty=True, stream=True)
         return exec_id['Id'], exec_stream
 
     def wait_process(
@@ -179,9 +179,7 @@ class EOSIOTestSession:
         :return: Exitcode and process output.
         :rtype: :ref:`typing_exe_result`
         """
-        out = ''
-        for chunk in exec_stream:
-            out += chunk.decode('utf-8')
+        out = bytes().join(exec_stream).decode('utf-8')
 
         info = self.dockerctl.client.api.exec_inspect(exec_id)
         return info['ExitCode'], out
@@ -247,9 +245,9 @@ class EOSIOTestSession:
 
         def run(cmd, **kwargs) -> Tuple[int, str]:
             exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
-            exec_run = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+            exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, tty=True, stream=True)
             out = ''
-            for line in exec_run:
+            for line in exec_stream:
                 line = line.decode('utf-8')
                 out += line
                 logging.info(line.rstrip())
