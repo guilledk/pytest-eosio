@@ -17,12 +17,25 @@ html_theme = 'sphinx_rtd_theme'
 
 default_dark_mode = False
 
+html_static_path = ['_static']
+html_js_files = [
+    'js/expandMenu.js'
+]
+
 html_theme_options = {
     'display_version': True,
-    'collapse_navigation': True,
-    'sticky_navigation': True,
-    'navigation_depth': 4,
+    'collapse_navigation': False,
     'titles_only': False
 }
 
 autodoc_member_order = 'bysource'
+
+aliases = [
+    'ExecutionResult', 'ExecutionStream',
+    'TransactionResult',
+    'ActionResult'
+]
+autodoc_type_aliases = {}
+for type_alias in aliases:
+    autodoc_type_aliases.update(
+        {type_alias: f'pytest_eosio.typing.{type_alias}'})

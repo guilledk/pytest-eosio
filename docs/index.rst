@@ -6,6 +6,7 @@ pytest-eosio documentation
 .. toctree::
     tutorial/install
     reference
+    :maxdepth: -1
 
 
 

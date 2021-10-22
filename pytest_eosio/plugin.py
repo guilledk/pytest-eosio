@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import time
 import json
 import string
@@ -42,6 +44,10 @@ from .globals import (
     get_exit_stack,
     set_session,
     get_session
+)
+
+from .typing import (
+    ExecutionResult, ExecutionStream, ActionResult
 )
 
 
@@ -107,7 +113,7 @@ class EOSIOTestSession:
         cmd: List[str],
         retry: int = 3,
         *args, **kwargs
-    ) -> Tuple[int, str]:
+    ) -> ExecutionResult:
         """Run command inside the virtual testnet docker container.
 
         :param cmd: Command and parameters separated in chunks in a list.
@@ -121,7 +127,7 @@ class EOSIOTestSession:
         :param kwargs: Same as ``args`` but for keyword arguments.
 
         :return: A tuple with the process exitcode and output.
-        :rtype: Tuple[int, str]
+        :rtype: :ref:`typing_exe_result`
         """
 
         for i in range(1, 2 + retry):
@@ -138,7 +144,7 @@ class EOSIOTestSession:
         self,
         cmd: List[str],
         **kwargs
-    ) -> Tuple[str, Iterator[str]]:
+    ) -> ExecutionStream:
         """Begin running the command inside the virtual container, return the
         internal docker process id, and a stream for the standard output.
 
@@ -151,7 +157,7 @@ class EOSIOTestSession:
 
         :return: A tuple with the process execution id and the output stream to
             be consumed.
-        :rtype: Tuple[str, Iterator[str]]
+        :rtype: :ref:`typing_exe_stream`
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
         exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
@@ -161,7 +167,7 @@ class EOSIOTestSession:
         self,
         exec_id: str,
         exec_stream: Iterator[str]
-    ) -> Tuple[int, str]:
+    ) -> ExecutionResult:
         """Collect output from process stream, then inspect process and return
         exitcode.
 
@@ -171,7 +177,7 @@ class EOSIOTestSession:
         :param exec_stream: Process output stream to be consumed.
 
         :return: Exitcode and process output.
-        :rtype: Tuple[int, str]
+        :rtype: :ref:`typing_exe_result`
         """
         out = ''
         for chunk in exec_stream:
@@ -769,7 +775,7 @@ class EOSIOTestSession:
         args: List[str],
         permissions: str,
         retry: int = 3
-    ) -> Tuple[int, Union[Dict[str, str], str]]:
+    ) -> ActionResult:
         """Execute an action defined in a given contract, in case of failure retry.
 
         :param contract: Contract were action is defined.
@@ -781,7 +787,7 @@ class EOSIOTestSession:
         :return: Always returns a tuple with the exit code at the beggining and
             depending if the transaction was exectued, either the resulting json dict,
             or the full output including errors as a string at the end.
-        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        :rtype: :ref:`typing_action_result`
         """
 
         args = [
@@ -817,7 +823,7 @@ class EOSIOTestSession:
             Iterator[List],  # params
             Iterator[str]    # permissions
         ]
-    ) -> List[Tuple[int, Union[Dict[str, str], str]]]:
+    ) -> List[ActionResult]:
         """Push several actions in parallel and collect their results. 
 
         Example code:
@@ -839,7 +845,7 @@ class EOSIOTestSession:
             ``contract name``, ``action name``, ``arguments list`` and ``permissions``
 
         :return: A list the results for each action execution.
-        :rtype: List[Tuple[int, Union[Dict[str, str], str]]]
+        :rtype: List[:ref:`typing_action_result`]
         """
         procs = [
             self.open_process([
@@ -857,7 +863,7 @@ class EOSIOTestSession:
         owner: str,
         name: str,
         key: Optional[str] = None,
-    ) -> Tuple[int, str]:
+    ) -> ExecutionResult:
         """Create an unstaked eosio account, usualy used by system contracts.
 
         :param owner: The system account that authorizes the creation of a new account.
@@ -865,7 +871,7 @@ class EOSIOTestSession:
         :param key: The owner public key or permission level for the new account (optional).
 
         :return: Exitcode and output.
-        :rtype: Tuple[int, str]
+        :rtype: :ref:`typing_exe_result`
         """
 
         if not key:
@@ -883,7 +889,7 @@ class EOSIOTestSession:
         cpu: str = '1000.0000 SYS',
         ram: int = 8192,
         key: Optional[str] = None
-    ) -> Tuple[int, str]:
+    ) -> ExecutionResult:
         """Create a staked eosio account.
 
         :param owner: The system account that authorizes the creation of a new
@@ -897,7 +903,7 @@ class EOSIOTestSession:
             (optional).
 
         :return: Exitcode and output.
-        :rtype: Tuple[int, str]
+        :rtype: :ref:`typing_exe_result`
         """
 
         key = self.dev_wallet_pkey
@@ -924,7 +930,7 @@ class EOSIOTestSession:
         net: str = '1000.0000 SYS',
         cpu: str = '1000.0000 SYS',
         ram: int = 8192
-    ):
+    ) -> List[ExecutionResult]:
         """Same as :func:`~pytest_eosio.EOSIOTestSession.create_account_staked`,
         but takes lists of names and keys, to create the accounts in parallel,
         which is faster than calling :func:`~pytest_eosio.EOSIOTestSession.creat
@@ -939,8 +945,8 @@ class EOSIOTestSession:
         :param cpu: Amount of system tokens to stake to reserve cpu time.
         :param ram: Amount of bytes of ram to buy for each account.
 
-        :return: Exitcode and output.
-        :rtype: Tuple[int, str]
+        :return: A list the results for each command execution.
+        :rtype: List[ExecutionResult]
         """
 
         assert len(names) == len(keys)
@@ -1077,7 +1083,7 @@ class EOSIOTestSession:
         payer: str,
         amount: int,
         receiver: Optional[str] = None
-    ) -> Tuple[int, Union[Dict[str, str], str]]:
+    ) -> ActionResult:
         """Buy a number of RAM bytes for an account.
 
         :param payer: Account to bill.
@@ -1086,7 +1092,7 @@ class EOSIOTestSession:
             instead of receiver.
 
         :return: Exitcode and output of ``buyrambytes`` push action call.
-        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        :rtype: :ref:`typing_action_result`
         """
 
         if not receiver:
@@ -1162,7 +1168,7 @@ class EOSIOTestSession:
         proposal_name: str,
         permissions: List[str],
         approver: str
-    ) -> Tuple[int, Union[Dict[str, str], str]]:
+    ) -> ActionResult:
         """Approve a multisig proposal.
 
         :param proposer: Account that created the proposal.
@@ -1171,7 +1177,7 @@ class EOSIOTestSession:
         :param approver: Permissions to run this action.
 
         :return: Exitcode and output of ``multisig.approve`` push action call.
-        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        :rtype: :ref:`typing_action_result`
         """
 
         cmd = [
@@ -1195,7 +1201,7 @@ class EOSIOTestSession:
         proposal_name: str,
         permission: str,
         wait: int = 3
-    ) -> Tuple[int, Union[Dict[str, str], str]]:
+    ) -> ActionResult:
         """Execute multi signature transaction proposal.
 
         :param proposer: Account that created the proposal.
@@ -1204,7 +1210,7 @@ class EOSIOTestSession:
         :param wait: Number of blocks to wait after executing.
 
         :return: Exitcode and output of ``multisig.exec`` push action call.
-        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        :rtype: :ref:`typing_action_result`
         """
 
         cmd = [
@@ -1226,14 +1232,14 @@ class EOSIOTestSession:
         self,
         proposer: str,
         proposal_name: str
-    ) -> Tuple[int, Union[Dict[str, str], str]]:
+    ) -> ActionResult:
         """Review a multisig proposal.
 
         :param proposer: Account that created the proposal.
         :param proposal_name: Name of the proposal.
 
         :return: Exitcode and output of ``multisig.review`` push action call.
-        :rtype: Tuple[int, Union[Dict[str, str], str]]
+        :rtype: :ref:`typing_action_result`
         """
 
         cmd = [
@@ -1250,7 +1256,17 @@ class EOSIOTestSession:
         self,
         sym: str,
         token_contract: str = 'eosio.token'
-    ) -> Dict:
+    ) -> Dict[str, str]:
+        """Get token statistics.
+
+        :param sym: Token symbol.
+        :param token_contract: Token contract.
+        
+        :return: A dictionary with ``\'supply\'``, ``\'max_supply\'`` and
+            ``\'issuer\'`` as keys.
+        :rtype: Dict[str, str]
+        """
+
         return self.get_table(
             token_contract,
             sym,
@@ -1260,8 +1276,18 @@ class EOSIOTestSession:
     def get_balance(
         self,
         account: str,
-        token_contract='eosio.token'
-    ) -> str:
+        token_contract: str = 'eosio.token'
+    ) -> Optional[str]:
+        """Get account balance.
+        
+        :param account: Account to query.
+        :param token_contract: Token contract.
+
+        :return: Account balance in asset form, ``None`` if user has no balance
+            entry.
+        :rtype: Optional[str]
+        """
+
         balances = self.get_table(
             token_contract,
             account,
@@ -1269,8 +1295,6 @@ class EOSIOTestSession:
         )
         if len(balances) == 1:
             return balances[0]['balance']
-        elif len(balances) > 1:
-            return balances
         else:
             return None
 
@@ -1278,8 +1302,18 @@ class EOSIOTestSession:
         self,
         issuer: str,
         max_supply: Union[str, Asset],
-        token_contract='eosio.token'
-    ):
+        token_contract: str = 'eosio.token'
+    ) -> ActionResult:
+        """Create a new token issued by ``issuer``.
+
+        :param issuer: Account that issues new token.
+        :param max_supply: Max token supply in asset form.
+        :param token_contract: Token contract.
+
+        :return: ``token_contract.create`` execution result.
+        :rtype: :ref:`typing_action_result`
+        """
+
         return self.push_action(
             token_contract,
             'create',
@@ -1292,8 +1326,19 @@ class EOSIOTestSession:
         issuer: str,
         quantity: Union[str, Asset],
         memo: str,
-        token_contract='eosio.token'
-    ):
+        token_contract: str = 'eosio.token'
+    ) -> ActionResult:
+        """Issue a specific quantity of tokens.
+
+        :param issuer: Account that issues new tokens.
+        :param quantity: Quantity of tokens to issue in asset form.
+        :param memo: Memo string to attach to transaction.
+        :param token_contract: Token contract.
+
+        :return: ``token_contract.issue`` execution result.
+        :rtype: :ref:`typing_action_result`
+        """
+
         return self.push_action(
             token_contract,
             'issue',
@@ -1307,8 +1352,20 @@ class EOSIOTestSession:
         _to: str,
         quantity: Union[str, Asset],
         memo: str,
-        token_contract='eosio.token'
-    ):
+        token_contract: str = 'eosio.token'
+    ) -> ActionResult:
+        """Transfer tokens.
+
+        :param _from: Account that sends the tokens.
+        :param _to: Account that recieves the tokens.
+        :param quantity: Quantity of tokens to issue in asset form.
+        :param memo: Memo string to attach to transaction.
+        :param token_contract: Token contract.
+
+        :return: ``token_contract.issue`` execution result.
+        :rtype: :ref:`typing_action_result`
+        """
+
         return self.push_action(
             token_contract,
             'transfer',
@@ -1322,7 +1379,17 @@ class EOSIOTestSession:
         quantity: Union[str, Asset],
         memo: str = '',
         token_contract='eosio.token'
-    ):
+    ) -> ActionResult:
+        """Transfer tokens from token contract to an account.
+
+        :param _to: Account that recieves the tokens.
+        :param quantity: Quantity of tokens to issue in asset form.
+        :param memo: Memo string to attach to transaction.
+        :param token_contract: Token contract.
+
+        :return: ``token_contract.issue`` execution result.
+        :rtype: :ref:`typing_action_result`
+        """
         return self.transfer_token(
             token_contract,
             _to,
@@ -1333,6 +1400,10 @@ class EOSIOTestSession:
 
 
     def init_sys_token(self):
+        """Initialize ``SYS`` token, with a supply of 
+        10000000000 units and four digits of precision.
+        """
+
         if not self._sys_token_init:
             self._sys_token_init = True
             max_supply = f'{10000000000:.4f} SYS'
