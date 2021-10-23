@@ -351,10 +351,10 @@ def get_container(dockerctl, repo: str, tag: str, *args, **kwargs):
     else:
         local_images = [
             img.tags
-            for img in dockerctl.client.images.list(repo)
+            for img in dockerctl.client.images.list()
         ]
 
-        if image not in local_images:
+        if [image] not in local_images:
             updates = {}
             for update in dockerctl.client.api.pull(
                 repo, tag=tag, stream=True, decode=True

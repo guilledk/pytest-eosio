@@ -1485,7 +1485,7 @@ def pytest_sessionstart(session):
             get_container(
                 dockerctl,
                 'guilledk/pytest-eosio',
-                'vtestnet',
+                'vtestnet-local',
                 mounts=docker_mounts,
                 publish_all_ports=True
             )
