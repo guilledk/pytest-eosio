@@ -1,0 +1,23 @@
+name: Pytest Tests
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
+        run: |
+          sudo pip install --upgrade pip
+          sudo pip install -e .
+      - name: Run tests
+        run: sudo pytest --log-cli-level=INFO
+
