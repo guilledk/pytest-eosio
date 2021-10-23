@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import json
+import select 
 import string
 import random
 import logging
@@ -160,13 +161,14 @@ class EOSIOTestSession:
         :rtype: :ref:`typing_exe_stream`
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
-        exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, tty=True, stream=True)
-        return exec_id['Id'], exec_stream
+        exec_sock = self.dockerctl.client.api.exec_start(exec_id=exec_id, socket=True)
+        exec_sock._sock.setblocking(False)
+        return exec_id['Id'], exec_sock
 
     def wait_process(
         self,
         exec_id: str,
-        exec_stream: Iterator[str]
+        exec_sock: Iterator[str]
     ) -> ExecutionResult:
         """Collect output from process stream, then inspect process and return
         exitcode.
@@ -179,9 +181,20 @@ class EOSIOTestSession:
         :return: Exitcode and process output.
         :rtype: :ref:`typing_exe_result`
         """
-        out = bytes().join(exec_stream).decode('utf-8')
+        info = { 'Running': True }
 
-        info = self.dockerctl.client.api.exec_inspect(exec_id)
+        out = ''
+        while info['Running']:
+            time.sleep(0.1)
+            ready = select.select([exec_sock._sock], [], [], 0.1)
+            if ready[0]:
+                raw = exec_sock.readline()
+                # consume header
+                raw = raw[8:]
+                out += raw.decode('utf-8')
+
+            info = self.dockerctl.client.api.exec_inspect(exec_id)
+
         return info['ExitCode'], out
 
     def get_manifest(self) -> Dict[str, str]:
@@ -245,14 +258,30 @@ class EOSIOTestSession:
 
         def run(cmd, **kwargs) -> Tuple[int, str]:
             exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
-            exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, tty=True, stream=True)
-            out = ''
-            for line in exec_stream:
-                line = line.decode('utf-8')
-                out += line
-                logging.info(line.rstrip())
+            exec_sock = self.dockerctl.client.api.exec_start(exec_id=exec_id, socket=True)
 
-            info = self.dockerctl.client.api.exec_inspect(exec_id)
+            info = { 'Running': True }
+            exec_sock._sock.setblocking(False)
+    
+            out = ''
+            while info['Running']:
+
+                time.sleep(0.1)
+                ready = select.select([exec_sock._sock], [], [], 0.1)
+                if ready[0]:
+                    raw = exec_sock.readline()
+                    # consume header
+                    raw = raw[8:]
+                    out += raw.decode('utf-8')
+                
+                else:
+                    logging.info('timeout waiting for output of command')
+
+                info = self.dockerctl.client.api.exec_inspect(exec_id)
+               
+            logging.info(f'cmd: {" ".join(cmd)}')
+            logging.info(out)
+
             return info['ExitCode'], out
 
         logging.info('\tperform build...')
