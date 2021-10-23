@@ -270,7 +270,9 @@ class EOSIOTestSession:
                     raw = exec_sock.readline()
                     # consume header
                     raw = raw[8:]
-                    out += raw.decode('utf-8')
+                    chunk = raw.decode('utf-8')
+                    logging.info(chunk)
+                    out += chunk
 
                 info = self.dockerctl.client.api.exec_inspect(exec_id)
                
