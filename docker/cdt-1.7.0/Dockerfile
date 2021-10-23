@@ -13,6 +13,12 @@ RUN wget https://github.com/EOSIO/eosio.cdt/releases/download/v1.7.0/eosio.cdt_1
 
 RUN apt-get install -y ./eosio.cdt_1.7.0-1-ubuntu-18.04_amd64.deb
 
+# install wasm-ld wrapper to disable threads
+WORKDIR /usr/opt/eosio.cdt/1.7.0/bin
+RUN mv wasm-ld wasm-ld.real
+COPY ld-wrapper.sh wasm-ld
+RUN chmod +x wasm-ld
+
 WORKDIR /root
 
 CMD sleep 9999999999
