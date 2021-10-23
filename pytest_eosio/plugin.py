@@ -271,9 +271,6 @@ class EOSIOTestSession:
                     # consume header
                     raw = raw[8:]
                     out += raw.decode('utf-8')
-                
-                else:
-                    logging.info('timeout waiting for output of command')
 
                 info = self.dockerctl.client.api.exec_inspect(exec_id)
                
@@ -318,7 +315,7 @@ class EOSIOTestSession:
             assert ec == 0
             self.reporter.write(" done.\n", flush=True)
 
-            cmd = ['make', f'-j{psutil.cpu_count()}']
+            cmd = ['make', 'VERBOSE=1', f'-j{psutil.cpu_count()}']
             logging.info(f'\t\t{" ".join(cmd)}')
             self.reporter.write("\tmake... ", flush=True)
             ec, _ = run(
