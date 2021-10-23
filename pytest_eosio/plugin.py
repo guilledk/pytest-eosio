@@ -168,7 +168,8 @@ class EOSIOTestSession:
     def wait_process(
         self,
         exec_id: str,
-        exec_sock: Iterator[str]
+        exec_sock: Iterator[str],
+        watchdog_timeout: float = 0.3
     ) -> ExecutionResult:
         """Collect output from process stream, then inspect process and return
         exitcode.
@@ -185,8 +186,7 @@ class EOSIOTestSession:
 
         out = ''
         while info['Running']:
-            time.sleep(0.1)
-            ready = select.select([exec_sock._sock], [], [], 0.1)
+            ready = select.select([exec_sock._sock], [], [], watchdog_timeout)
             if ready[0]:
                 raw = exec_sock.readline()
                 # consume header
@@ -265,9 +265,7 @@ class EOSIOTestSession:
     
             out = ''
             while info['Running']:
-
-                time.sleep(0.1)
-                ready = select.select([exec_sock._sock], [], [], 0.1)
+                ready = select.select([exec_sock._sock], [], [], 0.3)
                 if ready[0]:
                     raw = exec_sock.readline()
                     # consume header
@@ -390,9 +388,12 @@ class EOSIOTestSession:
                     
                     logging.info(f'prev hash: {prev_hash}')
                     logging.info(f'curr hash: {curr_hash}')
-                    
+                   
+                    short_prev_hash = prev_hash[:8] if prev_hash else 'none'
+                    short_curr_hash = curr_hash[:8] if curr_hash else 'none'
+
                     self.reporter.write(
-                        f"contract: {contract_name}, hashes: {prev_hash[:8]}, {curr_hash[:8]}\n",
+                        f"contract: {contract_name}, hashes: {short_prev_hash}, {short_curr_hash}\n",
                         flush=True)
 
                     if (prev_hash != curr_hash) or self.force_build:
