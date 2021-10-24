@@ -1,4 +1,4 @@
-name: Pytest Tests
+name: Pytest Tests Verbose
 
 on: [push]
 
