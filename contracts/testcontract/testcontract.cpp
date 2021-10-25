@@ -13,3 +13,7 @@ void testcontract::initcfg(uint64_t val) {
     entry.value = val; 
     cfg.set(entry, get_self());
 }
+
+void testcontract::timestamp() {
+    print(eosio::current_time_point().sec_since_epoch());
+}

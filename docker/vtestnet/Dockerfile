@@ -32,10 +32,6 @@ RUN wget https://github.com/EOSIO/eos/releases/download/v2.0.9/eosio_2.0.9-1-ubu
 
 RUN apt-get install -y ./eosio_2.0.9-1-ubuntu-18.04_amd64.deb
 
-COPY entrypoint.sh /
-
 EXPOSE 8888
 
-ENTRYPOINT ["/entrypoint.sh"]
-
-HEALTHCHECK --interval=5s --timeout=10s --retries=3 CMD tail -n 1 /tmp/nodeos.log | grep Produced
+CMD sleep 99999999999

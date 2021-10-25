@@ -15,7 +15,7 @@ from typing import Iterator, Optional, Union, Tuple, List, Dict
 from pathlib import Path
 from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
-from contextlib import ExitStack
+from contextlib import contextmanager, ExitStack
 
 import sys
 import toml
@@ -107,7 +107,8 @@ class EOSIOTestSession:
         self.sys_contracts_path = '/usr/opt/telos.contracts'
         self.sys_contracts = []
 
-        self._sys_token_init = False
+        self.start_keosd()
+        self.start_nodeos()
 
     def run(
         self,
@@ -161,15 +162,13 @@ class EOSIOTestSession:
         :rtype: :ref:`typing_exe_stream`
         """
         exec_id = self.dockerctl.client.api.exec_create(self.vtestnet.id, cmd, **kwargs)
-        exec_sock = self.dockerctl.client.api.exec_start(exec_id=exec_id, socket=True)
-        exec_sock._sock.setblocking(False)
-        return exec_id['Id'], exec_sock
+        exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
+        return exec_id['Id'], exec_stream
 
     def wait_process(
         self,
         exec_id: str,
-        exec_sock: Iterator[str],
-        watchdog_timeout: float = 0.3
+        exec_stream: Iterator[str]
     ) -> ExecutionResult:
         """Collect output from process stream, then inspect process and return
         exitcode.
@@ -182,18 +181,9 @@ class EOSIOTestSession:
         :return: Exitcode and process output.
         :rtype: :ref:`typing_exe_result`
         """
-        info = { 'Running': True }
-
-        out = ''
-        while info['Running']:
-            ready = select.select([exec_sock._sock], [], [], watchdog_timeout)
-            if ready[0]:
-                raw = exec_sock.readline()
-                # consume header
-                raw = raw[8:]
-                out += raw.decode('utf-8')
-
-            info = self.dockerctl.client.api.exec_inspect(exec_id)
+        
+        out = bytes().join(exec_stream).decode('utf-8')
+        info = self.dockerctl.client.api.exec_inspect(exec_id)
 
         return info['ExitCode'], out
 
@@ -257,28 +247,17 @@ class EOSIOTestSession:
         )
 
         def run(cmd, **kwargs) -> Tuple[int, str]:
+            logging.info(f'cmd: {" ".join(cmd)}')
             exec_id = self.dockerctl.client.api.exec_create(cdt.id, cmd, **kwargs)
-            exec_sock = self.dockerctl.client.api.exec_start(exec_id=exec_id, socket=True)
-
-            info = { 'Running': True }
-            exec_sock._sock.setblocking(False)
+            exec_stream = self.dockerctl.client.api.exec_start(exec_id=exec_id, stream=True)
     
             out = ''
-            while info['Running']:
-                ready = select.select([exec_sock._sock], [], [], 0.3)
-                if ready[0]:
-                    raw = exec_sock.readline()
-                    # consume header
-                    raw = raw[8:]
-                    chunk = raw.decode('utf-8')
-                    logging.info(chunk.rstrip())
-                    out += chunk
+            for chunk in exec_stream:
+                chunk = raw.decode('utf-8')
+                logging.info(chunk.rstrip())
+                out += chunk
 
-                info = self.dockerctl.client.api.exec_inspect(exec_id)
-               
-            logging.info(f'cmd: {" ".join(cmd)}')
-            logging.info(out)
-
+            info = self.dockerctl.client.api.exec_inspect(exec_id)
             return info['ExitCode'], out
 
         logging.info('\tperform build...')
@@ -509,6 +488,70 @@ class EOSIOTestSession:
             raise AssertionError(f'Couldn\'t deploy {account_name} contract.')
 
 
+    def start_keosd(self):
+        exec_id, exec_stream = self.open_process(['keosd'])
+        self._keosd_exec_id = exec_id
+        self._keosd_exec_stream = exec_stream
+        logging.info("launched keosd")
+
+    def start_nodeos(
+        self,
+        plugins: List[str] = [
+            'eosio::producer_plugin',
+            'eosio::producer_plugin',
+            'eosio::producer_api_plugin',
+            'eosio::chain_api_plugin',
+            'eosio::http_plugin',
+            'eosio::history_plugin',
+            'eosio::history_api_plugin'
+        ],
+        http_addr: str = '0.0.0.0:8888',
+        p2p_addr: str = '0.0.0.0:9876',
+        abi_serializer_max_time: int = 100000,
+        filter_on: str = '*',
+        allow_origin: str = '*',
+        contracts_console: bool = True,
+        validate_host: bool = False,
+        verbose_http_errors: bool = True
+    ):
+        _plugins = []
+        for plugin in plugins:
+            _plugins.append('--plugin')
+            _plugins.append(plugin)
+
+        flags = []
+
+        if contracts_console:
+            flags.append('--contracts-console')
+
+        if verbose_http_errors:
+            flags.append('--verbose-http-errors')
+
+        exec_id, exec_stream = self.open_process(
+            ['nodeos',
+                '-e',
+                '-p', 'eosio',
+                *_plugins,
+                *flags,
+                f'--http-server-address={http_addr}',
+                f'--p2p-listen-endpoint={p2p_addr}',
+                f'--abi-serializer-max-time-ms={abi_serializer_max_time}',
+                f'--filter-on={filter_on}',
+                f'--access-control-allow-origin={allow_origin}',
+                f'--http-validate-host={str(validate_host).lower()}']
+        )
+        self._nodeos_exec_id = exec_id
+        self._nodeos_exec_stream = exec_stream
+
+        # block until blocks are produced
+        for chunk in exec_stream:
+            chunk = chunk.decode('utf-8').rstrip()
+            logging.info(chunk)
+            if 'Produced' in chunk:
+                break
+
+        logging.info("launched nodeos")
+
     def boot_sequence(self):
         """Perform enterprise operating system bios sequence acording to:
 
@@ -591,14 +634,14 @@ class EOSIOTestSession:
         ec, _ = self.push_action(
             'eosio', 'setpriv',
             ['eosio.msig', 1],
-            'eosio@active'
+            'eosio@active', retry=10
         )
         assert ec == 0
 
         ec, _ = self.push_action(
             'eosio', 'init',
             ['0', '4,TLOS'],
-            'eosio@active'
+            'eosio@active', retry=10
         )
         assert ec == 0
 
@@ -776,7 +819,7 @@ class EOSIOTestSession:
         ec, _ = self.push_action(
             'eosio', 'activate',
             [digest],
-            'eosio@active'
+            'eosio@active', retry=10
         )
         assert ec == 0
         logging.info(f'{digest} active.')
@@ -903,7 +946,8 @@ class EOSIOTestSession:
 
         if not key:
             key = self.dev_wallet_pkey
-        ec, out = self.run(['cleos', 'create', 'account', owner, name, key])
+        ec, out = self.run(
+            ['cleos', 'create', 'account', owner, name, key], retry=10)
         assert ec == 0
         logging.info(f'created account: {name}')
         return ec, out
@@ -944,7 +988,7 @@ class EOSIOTestSession:
             '--stake-net', net,
             '--stake-cpu', cpu,
             '--buy-ram-kbytes', ram
-        ])
+        ], retry=10)
         logging.info(f'created staked account: {name}')
         logging.info(out)
         assert ec == 0
@@ -1141,6 +1185,11 @@ class EOSIOTestSession:
         start = self.get_info()['head_block_num']
         while (info := self.get_info())['head_block_num'] - start < n:
             time.sleep(sleep_time)
+
+    @contextmanager
+    def speed_up_time(self, factor: float):
+        #TODO
+        yield
 
     def multi_sig_propose(
         self,
@@ -1428,12 +1477,10 @@ class EOSIOTestSession:
 
 
     def init_sys_token(self, max_supply = '355000000.0000 TLOS'):
-        if not self._sys_token_init:
-            self._sys_token_init = True
-            ec, _ = self.create_token('eosio', max_supply)
-            assert ec == 0
-            ec, _ = self.issue_token('eosio', max_supply, __name__)
-            assert ec == 0
+        ec, _ = self.create_token('eosio', max_supply)
+        assert ec == 0
+        ec, _ = self.issue_token('eosio', max_supply, __name__)
+        assert ec == 0
 
 
 CONTRACTS_ROOTDIR = '/root/contracts'

@@ -1,4 +1,5 @@
 #include <eosio/eosio.hpp>
+#include <eosio/system.hpp>
 #include <eosio/singleton.hpp>
 
 using namespace eosio;
@@ -17,6 +18,9 @@ class [[eosio::contract]] testcontract : public contract {
 
         [[eosio::action]]
         void initcfg(uint64_t val);
+
+        [[eosio::action]]
+        void timestamp();
 
     private:
 

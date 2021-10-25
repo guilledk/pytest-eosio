@@ -27,7 +27,6 @@ def test_decide_init(telosdecide):
 
 
 def test_decide_new_tresaury(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -61,7 +60,6 @@ def test_decide_new_tresaury(telosdecide):
 
 
 def test_decide_register_voter(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -92,7 +90,6 @@ def test_decide_register_voter(telosdecide):
 
 
 def test_decide_mint(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -127,7 +124,6 @@ def test_decide_mint(telosdecide):
 
 
 def test_decide_new_ballot(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -179,7 +175,6 @@ def test_decide_new_ballot(telosdecide):
 
 
 def test_decide_open_voting(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -236,7 +231,6 @@ def test_decide_open_voting(telosdecide):
 
 
 def test_decide_close_voting(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -289,7 +283,6 @@ def test_decide_close_voting(telosdecide):
 
 
 def test_decide_cast_vote(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
@@ -367,7 +360,6 @@ def test_decide_cast_vote(telosdecide):
 
 
 def test_decide_parallel_cast_vote(telosdecide):
-    init_telos_token(telosdecide.testnet)
     fonds = f'{10000:.4f} TLOS'
     telosdecide.testnet.transfer_token(
         'eosio.token',
