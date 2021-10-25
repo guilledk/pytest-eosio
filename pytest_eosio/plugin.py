@@ -496,7 +496,7 @@ class EOSIOTestSession:
             abi_file,
             '-p', f'{account_name}@active'
         ]
-        
+       
         logging.info('contract deploy: ')
         ec, out = self.run(cmd, retry=6)
         logging.info(out)
@@ -597,7 +597,7 @@ class EOSIOTestSession:
 
         ec, _ = self.push_action(
             'eosio', 'init',
-            ['0', '4,SYS'],
+            ['0', '4,TLOS'],
             'eosio@active'
         )
         assert ec == 0
@@ -912,8 +912,8 @@ class EOSIOTestSession:
         self,
         owner: str,
         name: str,
-        net: str = '1000.0000 SYS',
-        cpu: str = '1000.0000 SYS',
+        net: str = '1000.0000 TLOS',
+        cpu: str = '1000.0000 TLOS',
         ram: int = 8192,
         key: Optional[str] = None
     ) -> ExecutionResult:
@@ -945,8 +945,9 @@ class EOSIOTestSession:
             '--stake-cpu', cpu,
             '--buy-ram-kbytes', ram
         ])
-        assert ec == 0
         logging.info(f'created staked account: {name}')
+        logging.info(out)
+        assert ec == 0
         return ec, out
 
     def create_accounts_staked(
@@ -954,8 +955,8 @@ class EOSIOTestSession:
         owner: str,
         names: List[str],
         keys: List[str],
-        net: str = '1000.0000 SYS',
-        cpu: str = '1000.0000 SYS',
+        net: str = '1000.0000 TLOS',
+        cpu: str = '1000.0000 TLOS',
         ram: int = 8192
     ) -> List[ExecutionResult]:
         """Same as :func:`~pytest_eosio.EOSIOTestSession.create_account_staked`,
@@ -1418,7 +1419,7 @@ class EOSIOTestSession:
         :rtype: :ref:`typing_action_result`
         """
         return self.transfer_token(
-            token_contract,
+            'eosio',
             _to,
             str(quantity),
             memo,
@@ -1426,14 +1427,9 @@ class EOSIOTestSession:
         )
 
 
-    def init_sys_token(self):
-        """Initialize ``SYS`` token, with a supply of 
-        10000000000 units and four digits of precision.
-        """
-
+    def init_sys_token(self, max_supply = '355000000.0000 TLOS'):
         if not self._sys_token_init:
             self._sys_token_init = True
-            max_supply = f'{10000000000:.4f} SYS'
             ec, _ = self.create_token('eosio', max_supply)
             assert ec == 0
             ec, _ = self.issue_token('eosio', max_supply, __name__)
@@ -1485,7 +1481,7 @@ def pytest_sessionstart(session):
             get_container(
                 dockerctl,
                 'guilledk/pytest-eosio',
-                'vtestnet-local',
+                'vtestnet',
                 mounts=docker_mounts,
                 publish_all_ports=True
             )
