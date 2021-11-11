@@ -253,7 +253,7 @@ class EOSIOTestSession:
     
             out = ''
             for chunk in exec_stream:
-                chunk = raw.decode('utf-8')
+                chunk = chunk.decode('utf-8')
                 logging.info(chunk.rstrip())
                 out += chunk
 
@@ -503,7 +503,8 @@ class EOSIOTestSession:
             'eosio::chain_api_plugin',
             'eosio::http_plugin',
             'eosio::history_plugin',
-            'eosio::history_api_plugin'
+            'eosio::history_api_plugin',
+            'eosio::testing_plugin'
         ],
         http_addr: str = '0.0.0.0:8888',
         p2p_addr: str = '0.0.0.0:9876',
@@ -538,7 +539,7 @@ class EOSIOTestSession:
                 f'--abi-serializer-max-time-ms={abi_serializer_max_time}',
                 f'--filter-on={filter_on}',
                 f'--access-control-allow-origin={allow_origin}',
-                f'--http-validate-host={str(validate_host).lower()}']
+                f'--http-validate-host={str(validate_host).lower()}'],
         )
         self._nodeos_exec_id = exec_id
         self._nodeos_exec_stream = exec_stream
@@ -547,10 +548,19 @@ class EOSIOTestSession:
         for chunk in exec_stream:
             chunk = chunk.decode('utf-8').rstrip()
             logging.info(chunk)
-            if 'Produced' in chunk:
+
+            if 'Produced block' in chunk:
                 break
 
+            if chunk is None:
+                raise BaseException("Couldn't start nodeos")
+
         logging.info("launched nodeos")
+
+    def dump_nodeos_logs(self):
+        info = self.dockerctl.client.api.exec_inspect(
+            self._nodeos_exec_id)
+        logging.info(json.dumps(info, indent=4))
 
     def boot_sequence(self):
         """Perform enterprise operating system bios sequence acording to:
@@ -726,9 +736,9 @@ class EOSIOTestSession:
         # Step 1: Create a Wallet
         logging.info('create wallet...')
         ec, out = self.run(['cleos', 'wallet', 'create', '--to-console'])
-        wallet_key = out.split('\n')[-2].strip('\"')
+        self._wallet_passwd = out.split('\n')[-2].strip('\"')
         assert ec == 0
-        assert len(wallet_key) == 53
+        assert len(self._wallet_passwd) == 53
         logging.info('wallet created')
 
         # Step 2: Open the Wallet
@@ -743,11 +753,12 @@ class EOSIOTestSession:
         # Step 3: Unlock it
         logging.info('unlock wallet...')
         ec, out = self.run(
-            ['cleos', 'wallet', 'unlock', '--password', wallet_key]
+            ['cleos', 'wallet', 'unlock', '--password', self._wallet_passwd]
         )
         assert ec == 0
 
         ec, out = self.run(['cleos', 'wallet', 'list'])
+        logging.info(out)
         assert ec == 0
         assert 'default *' in out
         logging.info('wallet unlocked')
@@ -823,6 +834,28 @@ class EOSIOTestSession:
         )
         assert ec == 0
         logging.info(f'{digest} active.')
+
+    def get_internal_plugin_version(self):
+        return requests.post(
+            f'{self.endpoint}/v1/testing/version').json()
+
+    def get_internal_plugin_debug_stats(self):
+        return requests.post(
+            f'{self.endpoint}/v1/testing/debug').json()
+
+    def skip_time(self, us: int):
+        logging.info(f'skiping {us} us...')
+        result = requests.post(
+            f'{self.endpoint}/v1/testing/skiptime',
+            json={
+                'time': us
+            }
+        ).json()
+
+        assert result == 'ok' 
+
+        logging.info(f'skip time done.')
+        
 
     # python context manager proto 
     def __enter__(self):
@@ -948,6 +981,9 @@ class EOSIOTestSession:
             key = self.dev_wallet_pkey
         ec, out = self.run(
             ['cleos', 'create', 'account', owner, name, key], retry=10)
+        if ec != 0:
+            logging.error(out)
+            logging.error(self.dump_nodeos_logs())
         assert ec == 0
         logging.info(f'created account: {name}')
         return ec, out
@@ -1185,11 +1221,6 @@ class EOSIOTestSession:
         start = self.get_info()['head_block_num']
         while (info := self.get_info())['head_block_num'] - start < n:
             time.sleep(sleep_time)
-
-    @contextmanager
-    def speed_up_time(self, factor: float):
-        #TODO
-        yield
 
     def multi_sig_propose(
         self,
