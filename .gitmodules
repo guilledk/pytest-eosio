@@ -1,3 +1,6 @@
 [submodule "contracts/telos.decide/libraries/telos.contracts"]
 	path = contracts/telos.decide/libraries/telos.contracts
 	url = https://github.com/telosnetwork/telos.contracts
+[submodule "bindings/libs/pybind11"]
+	path = bindings/libs/pybind11
+	url = https://github.com/pybind/pybind11
