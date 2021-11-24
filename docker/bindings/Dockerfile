@@ -36,15 +36,10 @@ RUN apt-get update && apt-get install -y \
     libboost-all-dev \
     libcurl4-gnutls-dev
 
-# Copy binding files
-WORKDIR /root
-
+RUN mkdir /root/work
+WORKDIR /root/work
 RUN git clone --recursive --branch shared_build https://github.com/guilledk/eos.git
 
-COPY libs /root/eos/libraries/testing/libs
-COPY python_bindings.cpp /root/eos/libraries/testing/python_bindings.cpp
-COPY CMakeLists.txt /tmp/CMakeLists.txt
-RUN cat /tmp/CMakeLists.txt >> /root/eos/libraries/testing/CMakeLists.txt
+RUN sed -i 's/rm -rf/echo/' eos/scripts/helpers/eosio.sh
 
-WORKDIR /root/eos
-RUN scripts/eosio_build.sh -y -i /usr/opt/eosio -s TLOS 
+WORKDIR /root/work/eos

@@ -102,4 +102,18 @@ Run tests:
 
     `docker system prune -a`
 
+###### Python Bindings Build
+
+- docker container:
+
+    docker build --tag bindings-builder -f docker/bindings/Dockerfile bindings/
+
+- do bindings build:
+
+    docker run \
+        --rm \
+        --mount type=bind,src="$PWD/build",target=/root/work/eos/build \
+        --mount type=bind,src="$PWD/bindings",target=/root/work/eos/libraries/testing/bindings \
+        bindings-builder \
+        scripts/eosio_build.sh -y -i /usr/opt/eosio -s TLOS
 

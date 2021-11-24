@@ -19,12 +19,12 @@ target_include_directories(
     py_eosio
     PUBLIC
     ${Boost_INCLUDE_DIRS}
-    "../fc/include"
-    "../chain/include"
-    "../testing/include"
-    "../wasm-jit/Include"
-    "../chainbase/include"
-    "../softfloat/source/include")
+    "../../fc/include"
+    "../../chain/include"
+    "../../testing/include"
+    "../../wasm-jit/Include"
+    "../../chainbase/include"
+    "../../softfloat/source/include")
 
 target_link_libraries(
     py_eosio
