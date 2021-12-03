@@ -2,9 +2,16 @@
 
 #include <eosio/chain/name.hpp>
 #include <eosio/chain/types.hpp>
+#include <eosio/chain/block.hpp>
+#include <eosio/chain/controller.hpp>
 #include <eosio/chain/block_header.hpp>
+#include <eosio/chain/backing_store.hpp>
 #include <eosio/chain/block_timestamp.hpp>
+#include <eosio/chain/block_log_config.hpp>
 #include <eosio/chain/protocol_feature_activation.hpp>
+
+
+#include <chainbase/pinnable_mapped_file.hpp>
 
 
 #include <pybind11/stl.h>
@@ -19,14 +26,45 @@ namespace chain = eosio::chain;
 using std::pair;
 using std::vector;
 
+typedef pair<chain::account_name, chain::action_name> contract_action;
+
+
+PYBIND11_MAKE_OPAQUE(chain::flat_set<chain::account_name>);
+PYBIND11_MAKE_OPAQUE(chain::flat_set<contract_action>);
+
+
+#define FLAT_SET_DEF(V, MODULE, CLASS_NAME) \
+py::class_<chain::flat_set<V>>(MODULE, CLASS_NAME) \
+    .def("list", [](const chain::flat_set<V>& set) { \
+        py::list ret; \
+        for (const V& n : set) \
+            ret.append(&n); \
+        return ret; \
+    }) \
+    .def("len", &chain::flat_set<V>::size) \
+    .def("add", [](chain::flat_set<V>& set, V n) { set.insert(n); }) \
+    .def("discard", [](chain::flat_set<V>& set, V n) { set.erase(n); }) \
+    .def("clear", [](chain::flat_set<V>& set) { set.clear(); }) \
+    .def("__contains__", [](const chain::flat_set<V>& set, V n) { \
+        return set.contains(n); \
+    });
+
+
 
 PYBIND11_MODULE(py_eosio, root_mod) {
+
+    py::module collections = root_mod.def_submodule("collections");
+
+    FLAT_SET_DEF(chain::account_name, collections, "AccountNameFlatSet");
+    FLAT_SET_DEF(contract_action, collections, "ActionBlackList");
 
     py::module chain_mod = root_mod.def_submodule("chain");
 
     py::module time_mod = chain_mod.def_submodule("time");
     py::module types_mod = chain_mod.def_submodule("types");
+    py::module config_mod = chain_mod.def_submodule("config");
     py::module crypto_mod = chain_mod.def_submodule("crypto");
+    py::module testing_mod = chain_mod.def_submodule("testing");
 
     /*
      *
@@ -151,6 +189,69 @@ PYBIND11_MODULE(py_eosio, root_mod) {
         ) {
             chain::emplace_extension(exts, eid, std::move(data));    
         });
+
+    py::class_<chain::path>(types_mod, "Path")
+        .def(py::init())
+        .def(py::init<std::string>())
+        .def(py::self /= py::self)
+        .def(py::self  / py::self)
+        .def(py::self == py::self)
+        .def(py::self != py::self)
+        .def(py::self  < py::self)
+        .def("replace_extension", &chain::path::replace_extension)
+        .def("string", &chain::path::string)
+        .def("generic_string", &chain::path::string)
+        .def("preferred_string", &chain::path::string)
+        .def("parent_path", &chain::path::parent_path)
+        .def("filename", &chain::path::filename)
+        .def("stem", &chain::path::stem)
+        .def("extension", &chain::path::extension)
+        .def("is_absolute", &chain::path::is_absolute)
+        .def("is_relative", &chain::path::is_relative);
+
+    py::enum_<chain::backing_store_type>(types_mod, "BackingStoreType")
+        .value("CHAINBASE", chain::backing_store_type::CHAINBASE)
+        .value("ROCKSDB", chain::backing_store_type::ROCKSDB)
+        .export_values();
+
+    py::enum_<chain::wasm_interface::vm_type>(types_mod, "VMType")
+        .value("eos_vm", chain::wasm_interface::vm_type::eos_vm)
+        .value("eos_vm_jit", chain::wasm_interface::vm_type::eos_vm_jit)
+        .value("eos_vm_oc", chain::wasm_interface::vm_type::eos_vm_oc)
+        .export_values();
+
+    py::enum_<chain::db_read_mode>(types_mod, "DBReadMode")
+        .value("SPECULATIVE", chain::db_read_mode::SPECULATIVE)
+        .value("HEAD", chain::db_read_mode::HEAD)
+        .value("READ_ONLY", chain::db_read_mode::READ_ONLY)
+        .value("IRREVERSIBLE", chain::db_read_mode::IRREVERSIBLE)
+        .export_values();
+
+    py::enum_<chain::validation_mode>(types_mod, "ValidationMode")
+        .value("FULL", chain::validation_mode::FULL)
+        .value("LIGHT", chain::validation_mode::LIGHT)
+        .export_values();
+
+    py::enum_<chainbase::pinnable_mapped_file::map_mode>(types_mod, "MappedFileMode")
+        .value("mapped",  chainbase::pinnable_mapped_file::map_mode::mapped)
+        .value("heap", chainbase::pinnable_mapped_file::map_mode::heap)
+        .value("locked", chainbase::pinnable_mapped_file::map_mode::locked)
+        .export_values();
+
+    /*
+     *
+     * chain.config
+     *
+     */
+
+    py::class_<chain::block_log_config>(config_mod, "BlockLogConfig")
+        .def(py::init());
+
+    py::class_<chain::eosvmoc::config>(config_mod, "EOSVMOCConfig")
+        .def(py::init());
+
+    py::class_<chain::controller::config>(config_mod, "ControllerConfig")
+        .def(py::init());
 
     /*
      *
@@ -289,4 +390,38 @@ PYBIND11_MODULE(py_eosio, root_mod) {
     >(root_mod, "SignedBlockHeader")
         .def(py::init())
         .def_readwrite("producer_signature", &chain::signed_block_header::producer_signature);
+
+    py::class_<chain::block_header_extension>(root_mod, "BlockHeaderExtension")
+        .def(py::init());
+
+    py::class_<
+        chain::signed_block,
+        chain::signed_block_header
+    > signed_block(root_mod, "SignedBlock");
+
+    py::enum_<chain::signed_block::prune_state_type>(signed_block, "PruneState")
+        .value("incomplete", chain::signed_block::prune_state_type::incomplete)
+        .value("complete", chain::signed_block::prune_state_type::complete)
+        .value("complete_legacy", chain::signed_block::prune_state_type::complete_legacy)
+        .export_values();
+
+    signed_block
+        .def(py::init())
+        .def(py::init<const chain::signed_block_header&>())
+        .def("clone", &chain::signed_block::clone)
+        .def("get_prune_state", [](const chain::signed_block& b) {
+            return b.prune_state.value;
+        })
+        .def("set_prune_state", [](chain::signed_block& b, chain::signed_block::prune_state_type val) {
+            b.prune_state = val; 
+        });
+
+    /*
+     *
+     * chain.testing
+     *
+     */
+
+
+
 }

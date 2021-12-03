@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     sudo \
     ruby \
-    cmake \
     clang \
     python3 \
     libtool \
@@ -38,8 +37,21 @@ RUN apt-get update && apt-get install -y \
 
 RUN mkdir /root/work
 WORKDIR /root/work
+
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.22.0/cmake-3.22.0.tar.gz
+RUN tar xvf cmake-3.22.0.tar.gz
+WORKDIR /root/work/cmake-3.22.0
+RUN ./boostrap
+RUN make
+RUN make install
+
 RUN git clone --recursive --branch shared_build https://github.com/guilledk/eos.git
+RUN git clone --recursive --branch pybind11_backend https://github.com/guilledk/pytest-eosio.git
+
+RUN cp -r pytest-eosio/bindings eos/libraries/testing/bindings
 
 RUN sed -i 's/rm -rf/echo/' eos/scripts/helpers/eosio.sh
 
 WORKDIR /root/work/eos
+
+RUN scripts/eosio_build.sh -y -i /usr/opt/eosio -s TLOS

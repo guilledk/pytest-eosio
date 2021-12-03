@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.21)
 project(python_bindings)
 
 
@@ -31,6 +31,7 @@ target_link_libraries(
     PUBLIC
     pybind11::module pybind11::lto
     eosio_chain
+    chainbase
     fc
     ${ROCKSDB_SHARED_LIB}
     ${Boost_LIBRARIES})
@@ -41,3 +42,24 @@ pybind11_strip(py_eosio)
 
 set_target_properties(py_eosio PROPERTIES CXX_VISIBILITY_PRESET "hidden"
                                          CUDA_VISIBILITY_PRESET "hidden")
+
+
+install(TARGETS py_eosio
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/py-eosio/lib")
+
+install(CODE [[
+    file(GET_RUNTIME_DEPENDENCIES
+        RESOLVED_DEPENDENCIES_VAR RES
+        UNRESOLVED_DEPENDENCIES_VAR UNRES
+        CONFLICTING_DEPENDENCIES_PREFIX CONFLICTING_DEPENDENCIES
+        LIBRARIES $<TARGET_FILE:py_eosio>
+    )
+    foreach(DEP ${RES})
+        file(INSTALL
+            DESTINATION "${CMAKE_INSTALL_PREFIX}/py-eosio/lib"
+            TYPE SHARED_LIBRARY
+            FOLLOW_SYMLINK_CHAIN
+            FILES "${DEP}"
+        )
+    endforeach()
+]])
