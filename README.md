@@ -111,9 +111,8 @@ Run tests:
 - do bindings build:
 
     docker run \
-        --rm \
-        --mount type=bind,src="$PWD/build",target=/root/work/eos/build \
-        --mount type=bind,src="$PWD/bindings",target=/root/work/eos/libraries/testing/bindings \
+        --rm 
+        -it \
+        --mount type=bind,src="$PWD/bindings",target=/root/work/bindings \
         bindings-builder \
-        scripts/eosio_build.sh -y -i /usr/opt/eosio -s TLOS
-
+        bash

@@ -32,7 +32,6 @@ RUN apt-get update && apt-get install -y \
     autotools-dev \
     build-essential \
     libusb-1.0-0-dev \
-    libboost-all-dev \
     libcurl4-gnutls-dev
 
 RUN mkdir /root/work
@@ -41,17 +40,31 @@ WORKDIR /root/work
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.22.0/cmake-3.22.0.tar.gz
 RUN tar xvf cmake-3.22.0.tar.gz
 WORKDIR /root/work/cmake-3.22.0
-RUN ./boostrap
-RUN make
+RUN ./bootstrap
+RUN make -j $(nproc)
 RUN make install
 
-RUN git clone --recursive --branch shared_build https://github.com/guilledk/eos.git
-RUN git clone --recursive --branch pybind11_backend https://github.com/guilledk/pytest-eosio.git
+WORKDIR /root/work
+RUN wget https://boostorg.jfrog.io/artifactory/main/release/1.71.0/source/boost_1_71_0.tar.gz
+RUN tar xvf boost_1_71_0.tar.gz
+WORKDIR /root/work/boost_1_71_0
+RUN ./bootstrap.sh
+RUN ./b2 link=shared install
 
-RUN cp -r pytest-eosio/bindings eos/libraries/testing/bindings
+WORKDIR /root
+RUN git clone git://github.com/pyenv/pyenv.git .pyenv
+ENV HOME  /root
+ENV PYENV_ROOT $HOME/.pyenv
+ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
 
-RUN sed -i 's/rm -rf/echo/' eos/scripts/helpers/eosio.sh
+RUN pyenv install 3.10.0
+RUN pyenv global 3.10.0
 
-WORKDIR /root/work/eos
+WORKDIR /root/work/bindings
+COPY libs libs
+COPY CMakeLists.txt CMakeLists.txt
+COPY python_bindings.cpp python_bindings.cpp
 
-RUN scripts/eosio_build.sh -y -i /usr/opt/eosio -s TLOS
+RUN cmake -DCMAKE_INSTALL_PREFIX="$(pwd)/build" .
+RUN make -j $(nproc)
+RUN make install py_eosio

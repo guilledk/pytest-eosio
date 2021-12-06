@@ -113,59 +113,9 @@ PYBIND11_MODULE(py_eosio, root_mod) {
      *
      */
 
-    py::class_<chain::weight_type>(types_mod, "Weight")
-        .def(py::init([] (uint16_t v) {
-            return new chain::weight_type(v);
-        }));
-
-    py::class_<chain::block_num_type>(types_mod, "BlockNum")
-        .def(py::init([] (uint32_t v) {
-            return new chain::block_num_type(v);
-        }));
-
-    py::class_<chain::share_type>(types_mod, "Share")
-        .def(py::init([] (int64_t v) {
-            return new chain::share_type(v);
-        }));
-
     py::class_<chain::bytes>(types_mod, "Bytes")
         .def(py::init([] (vector<char> buf) {
             return new chain::bytes(buf);
-        }));
-
-    py::class_<chain::block_id_type>(types_mod, "BlockId")
-        .def(py::init([] (std::string hex) {
-            return new chain::block_id_type(hex);
-        }));
-
-    py::class_<chain::checksum_type>(types_mod, "Checksum")
-        .def(py::init([] (std::string hex) {
-            return new chain::checksum_type(hex);
-        }));
-
-    py::class_<chain::checksum160_type>(types_mod, "Checksum160")
-        .def(py::init([] (std::string hex) {
-            return new chain::checksum160_type(hex);
-        }));
-
-    py::class_<chain::checksum256_type>(types_mod, "Checksum256")
-        .def(py::init([] (std::string hex) {
-            return new chain::checksum256_type(hex);
-        }));
-
-    py::class_<chain::checksum512_type>(types_mod, "Checksum512")
-        .def(py::init([] (std::string hex) {
-            return new chain::checksum512_type(hex);
-        }));
-
-    py::class_<chain::transaction_id_type>(types_mod, "TransactionId")
-        .def(py::init([] (std::string hex) {
-            return new chain::transaction_id_type(hex);
-        }));
-
-    py::class_<chain::digest_type>(types_mod, "Digest")
-        .def(py::init([] (std::string hex) {
-            return new chain::digest_type(hex);
         }));
 
     py::class_<chain::signature_type>(types_mod, "Signature")
