@@ -102,4 +102,7 @@ Run tests:
 
     `docker system prune -a`
 
+###### Python Bindings Build
 
+NEW!: experimental python bindings directly to native tester tools provided by
+EOSIO core: https://github.com/guilledk/py-eosio
