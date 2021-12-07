@@ -104,15 +104,5 @@ Run tests:
 
 ###### Python Bindings Build
 
-- docker container:
-
-    docker build --tag bindings-builder -f docker/bindings/Dockerfile bindings/
-
-- do bindings build:
-
-    docker run \
-        --rm 
-        -it \
-        --mount type=bind,src="$PWD/bindings",target=/root/work/bindings \
-        bindings-builder \
-        bash
+NEW!: experimental python bindings directly to native tester tools provided by
+EOSIO core: https://github.com/guilledk/py-eosio
