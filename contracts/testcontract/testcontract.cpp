@@ -13,3 +13,11 @@ void testcontract::initcfg(uint64_t val) {
     entry.value = val; 
     cfg.set(entry, get_self());
 }
+
+void testcontract::addsecidx(uint64_t other) {
+    secidx_table test_table(get_self(), get_self().value);
+    test_table.emplace(get_self(), [&](auto& row) {
+        row.id = test_table.available_primary_key();
+        row.other = other;
+    });
+}
