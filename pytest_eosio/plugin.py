@@ -57,6 +57,9 @@ def pytest_addoption(parser):
         '--endpoint', action='store', default='', help='blockchain api endpoint to target'
     )
     parser.addoption(
+        '--sys-dir', action='store', default='/usr/opt/telos.contracts', help='system contracts dir'
+    )
+    parser.addoption(
         '--skip-build', action='store_true', default=False, help='dont\'t build contract'
     )
     parser.addoption(
@@ -104,7 +107,7 @@ class EOSIOTestSession:
         self.user_keys = dict()
         self.manifest = {}
 
-        self.sys_contracts_path = '/usr/opt/telos.contracts'
+        self.sys_contracts_path = config.getoption('--sys-dir') 
         self.sys_contracts = []
 
         self._sys_token_init = False
@@ -302,13 +305,14 @@ class EOSIOTestSession:
             f'test -f {work_dir}/CMakeLists.txt && echo True'
         ])
         if is_cmake == 'True\n':  #CMake
-            cxxflags = '\ '.join([f'-I{incl}' for incl in includes])
+            cxxflags = ' '.join([f'-I{incl}' for incl in includes])
             logging.info(f'\t\tcxxflags: {cxxflags}')
             self.reporter.write("\tcmake... ", flush=True)
             cmd = [
                 'cmake',
                 f'-DSYS_CONTRACTS_DIR={self.sys_contracts_path}',
                 f'-DCUSTOM_INCLUDES_DIR={CUSTOM_INCLUDES_DIR}',
+                f'-DCMAKE_CXX_FLAGS={cxxflags}',
                 work_dir
             ]
             logging.info(f'\t\t{" ".join(cmd)}')
@@ -347,6 +351,7 @@ class EOSIOTestSession:
         
         :param default_cdt: Default contract development toolkit version.
         """
+            
 
         ec, out = self.run(
             ['sh', '-c', 'echo */include'],
@@ -373,6 +378,15 @@ class EOSIOTestSession:
 
         with ExitStack() as stack:
             with self.capture_manager.global_and_fixture_disabled():
+                self.sys_contracts_mount = self.sys_contracts_path + '/contracts'
+                if self.sys_contracts_path != '/usr/opt/telos.contracts':
+                    self.sys_contracts_mount = self.sys_contracts_path + '/build/contracts'
+                    self.build_contract(
+                        '1.6.3',
+                        stack,
+                        self.sys_contracts_path
+                    )
+
                 for contract_name, config in manifest.items():
                     contract_node = Path(config['dir'])
                     binfo_path = contract_node / '.binfo'
@@ -541,8 +555,6 @@ class EOSIOTestSession:
 
         """
 
-        sys_contracts_mount = f'{self.sys_contracts_path}/contracts'
-
         for name in [
             'eosio.bpay',
             'eosio.names',
@@ -558,19 +570,19 @@ class EOSIOTestSession:
 
         self.deploy_contract(
             'eosio.token',
-            f'{sys_contracts_mount}/eosio.token',
+            f'{self.sys_contracts_mount}/eosio.token',
             staked=False
         )
 
         self.deploy_contract(
             'eosio.msig',
-            f'{sys_contracts_mount}/eosio.msig',
+            f'{self.sys_contracts_mount}/eosio.msig',
             staked=False
         )
 
         self.deploy_contract(
             'eosio.wrap',
-            f'{sys_contracts_mount}/eosio.wrap',
+            f'{self.sys_contracts_mount}/eosio.wrap',
             staked=False
         )
 
@@ -580,7 +592,7 @@ class EOSIOTestSession:
 
         self.deploy_contract(
             'eosio.system',
-            f'{sys_contracts_mount}/eosio.system',
+            f'{self.sys_contracts_mount}/eosio.system',
             account_name='eosio',
             create_account=False
         )
