@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 import json
 import select 
@@ -11,13 +12,13 @@ import logging
 import tarfile
 import subprocess
 
+from sys import platform
 from typing import Iterator, Optional, Union, Tuple, List, Dict
 from pathlib import Path
 from difflib import SequenceMatcher
 from subprocess import PIPE, STDOUT
 from contextlib import ExitStack
 
-import sys
 import toml
 import pytest
 import psutil
@@ -88,8 +89,14 @@ class EOSIOTestSession:
         if endpoint:
             self.endpoint = endpoint
         else:
-            container_port = 8888 
-            self.endpoint = f'http://localhost:{container_port}'
+            if platform == 'linux':
+                container_port = 8888 
+                self.endpoint = f'http://localhost:{container_port}'
+            else:
+                ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
+                container_port = ports[0]['HostPort']
+
+                self.endpoint = f'http://localhost:{container_port}'
 
         self.skip_build = config.getoption('--skip-build')
         self.force_build = config.getoption('--force-build')
@@ -1491,13 +1498,18 @@ def pytest_sessionstart(session):
 
         terminal_reporter.write("launching virtual testnet...", flush=True)
 
+        kwargs = {}
+        if platform == 'linux':
+            kwargs['network'] = 'host'
+
         container = get_exit_stack().enter_context(
             get_container(
                 dockerctl,
                 'guilledk/pytest-eosio',
                 'vtestnet',
                 mounts=docker_mounts,
-                network='host'
+                remove=True,
+                **kwargs
             )
         )
 
