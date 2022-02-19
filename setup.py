@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
 	name='pytest-eosio',
-	version='0.1a5',
+	version='0.1a6',
 	description='Pytest plugin for smart contract development',
 	author='Guillermo Rodriguez',
 	author_email='guillermor@fing.edu.uy',
@@ -16,6 +16,6 @@ setup(
 		'psutil',
         'natsort',
         'requests',
-		'pytest-dockerctl@git+git://github.com/pikers/pytest-dockerctl.git'
+		'pytest-dockerctl@git+git://github.com/guilledk/pytest-dockerctl.git@host_network'
 	]
 )

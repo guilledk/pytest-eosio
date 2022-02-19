@@ -4,4 +4,4 @@ pytest
 psutil
 natsort
 requests
-git+git://github.com/pikers/pytest-dockerctl.git
+pytest_dockerctl@git+https://github.com/guilledk/pytest-dockerctl.git@host_network

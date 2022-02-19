@@ -38,5 +38,3 @@ def test_secondary_index_endianess(eosio_testnet):
     logging.info(rows)
 
     assert len(rows) == 1
-
-    breakpoint()
