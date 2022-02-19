@@ -23,6 +23,7 @@ nodeos -e -p eosio \
 --access-control-allow-origin='*' \
 --contracts-console \
 --http-validate-host=false \
+--max-transaction-time=1000 \
 --verbose-http-errors >> /tmp/nodeos.log 2>&1 &
 
 sleep 9999999999

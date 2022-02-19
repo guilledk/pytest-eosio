@@ -88,9 +88,7 @@ class EOSIOTestSession:
         if endpoint:
             self.endpoint = endpoint
         else:
-            ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
-            container_port = ports[0]['HostPort']
-
+            container_port = 8888 
             self.endpoint = f'http://localhost:{container_port}'
 
         self.skip_build = config.getoption('--skip-build')
@@ -1499,7 +1497,7 @@ def pytest_sessionstart(session):
                 'guilledk/pytest-eosio',
                 'vtestnet',
                 mounts=docker_mounts,
-                publish_all_ports=True
+                network='host'
             )
         )
 

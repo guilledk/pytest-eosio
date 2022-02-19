@@ -1,3 +1,8 @@
 [submodule "contracts/telos.decide/libraries/telos.contracts"]
 	path = contracts/telos.decide/libraries/telos.contracts
 	url = https://github.com/telosnetwork/telos.contracts
+[submodule "contracts/telos.contracts"]
+	path = contracts/telos.contracts
+	url = git@github.com:telosnetwork/telos.contracts.git
+[submodule "contracts/telos.contracts/"]
+	url = https://github.com/guilledk/telos.contracts.git
