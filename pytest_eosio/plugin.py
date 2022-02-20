@@ -92,6 +92,7 @@ class EOSIOTestSession:
             if platform == 'linux':
                 container_port = 8888 
                 self.endpoint = f'http://localhost:{container_port}'
+                
             else:
                 ports = waitfor(vtestnet, ('NetworkSettings', 'Ports', '8888/tcp'))
                 container_port = ports[0]['HostPort']
@@ -513,11 +514,11 @@ class EOSIOTestSession:
             str(wasm_path.parent),
             wasm_file,
             abi_file,
-            '-p', f'{account_name}@active'
+            '-p', f'{account_name}@active', '-x', '90'
         ]
         
         logging.info('contract deploy: ')
-        ec, out = self.run(cmd, retry=6)
+        ec, out = self.run(cmd, retry=20)
         logging.info(out)
 
         if ec == 0:
@@ -1501,6 +1502,9 @@ def pytest_sessionstart(session):
         kwargs = {}
         if platform == 'linux':
             kwargs['network'] = 'host'
+        else:
+            kwargs['publish_all_ports'] = True
+            kwargs['network'] = 'bridge'
 
         container = get_exit_stack().enter_context(
             get_container(
@@ -1508,7 +1512,6 @@ def pytest_sessionstart(session):
                 'guilledk/pytest-eosio',
                 'vtestnet',
                 mounts=docker_mounts,
-                remove=True,
                 **kwargs
             )
         )
