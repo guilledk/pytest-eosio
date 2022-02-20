@@ -72,6 +72,9 @@ def pytest_addoption(parser):
     parser.addoption(
         '--keep-alive', action='store_true', default=False, help='after running test session, keep blockchain open'
     )
+    parser.addoption(
+        '--skip-boot', action='store_true', default=False, help='skip bios boot sequence'
+    )
 
 
 class EOSIOTestSession:
@@ -102,6 +105,9 @@ class EOSIOTestSession:
         self.skip_build = config.getoption('--skip-build')
         self.force_build = config.getoption('--force-build')
         self.custom_includes = config.getoption('--include')
+        self.perform_boot = not config.getoption('--skip-boot')
+
+        logging.info(self.perform_boot)
 
         self.reporter = config.pluginmanager.get_plugin('terminalreporter')
         self.capture_manager = config.pluginmanager.get_plugin('capturemanager')
@@ -458,7 +464,7 @@ class EOSIOTestSession:
 
         if create_account:
             logging.info('\tcreate account...')
-            if staked:
+            if staked and self.perform_boot:
                 self.create_account_staked('eosio', account_name)
             else:
                 self.create_account('eosio', account_name)
@@ -620,6 +626,7 @@ class EOSIOTestSession:
         )
         assert ec == 0
 
+    def deploy_user_contracts(self):
         manifest = self.get_manifest()
 
         for contract_name, config in manifest.items():
@@ -805,8 +812,11 @@ class EOSIOTestSession:
 
         if not self.skip_build:
             self.build_contracts()
-        
-        self.boot_sequence()
+       
+        if self.perform_boot:
+            self.boot_sequence()
+
+        self.deploy_user_contracts()
 
         return self
 
